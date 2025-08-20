@@ -41,41 +41,51 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
-    // Готовим URL строго как в curl из твоего скрина
+    // Формируем URL строго как в curl
     const url = `${APPS_GET_CHAT_URL}?deploymentToken=${encodeURIComponent(ABACUS_DEPLOYMENT_TOKEN)}&deploymentId=${encodeURIComponent(DEPLOYMENT_ID)}`;
 
-    // Тело минимально необходимое: messages + опциональные поля
     const body = {
       messages: [{ is_user: true, text: userText }],
       conversationId: String(chatId),
       userId: String(chatId)
-      // при необходимости можно добавить: llmName, systemMessage, temperature и т.д.
     };
 
     console.log('Calling Abacus URL:', url);
 
     const resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' }, // без Authorization — токен в query
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
 
     const raw = await resp.text();
-    console.log('Abacus status:', resp.status, raw.slice(0, 200));
+    console.log('Abacus status:', resp.status, raw.slice(0, 400));
 
     let botReply = 'Извините, не удалось получить ответ.';
     if (resp.ok) {
       try {
         const data = JSON.parse(raw || '{}');
-        const extracted =
+
+        // Попробуем извлечь текст из разных возможных полей
+        botReply =
           data?.responseText ||
           data?.text ||
           data?.response ||
           data?.message ||
           data?.choices?.[0]?.message?.content ||
           data?.result?.text ||
-          '';
-        if (extracted) botReply = extracted;
+          botReply;
+
+        // Доп. случай: формат {"success": true, "result": {"messages": [{is_user: true, text: "..."}, {is_user: false, text: "..."}]}}
+        if (!data?.responseText && data?.result?.messages?.length) {
+          const lastAssistant = [...data.result.messages].reverse().find(m => m && m.is_user === false && typeof m.text === 'string');
+          if (lastAssistant?.text) botReply = lastAssistant.text;
+        }
+
+        // Небольшая защита на случай пустой строки
+        if (!botReply || typeof botReply !== 'string' || !botReply.trim()) {
+          botReply = 'Извините, не удалось получить ответ.';
+        }
       } catch (e) {
         console.error('JSON parse error:', e);
       }
