@@ -1,7 +1,7 @@
 // api/telegram.js
 // Телеграм-вебхук с проксированием в Abacus.AI (getChatResponse)
 
-const ABACUS_DEPLOYMENT_URL = 'ttps://api.abacus.ai/predict/getChatResponse';
+const ABACUS_DEPLOYMENT_URL = 'https://api.abacus.ai/predict/getChatResponse';
 
 export default async function handler(req, res) {
   try {
