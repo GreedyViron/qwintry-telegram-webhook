@@ -1,17 +1,7 @@
 // api/telegram.js
-// Telegram webhook → Abacus.AI with endpoint auto-fallback (apps.abacus.ai)
+// Telegram webhook → Abacus.AI (strict apps.abacus.ai/api/getChatResponse with query params)
 
-const ABACUS_ENDPOINTS = [
-  // Основной из твоего curl-примера (хост apps.abacus.ai)
-  'https://apps.abacus.ai/api/getChatResponse',
-  // Запасные варианты на том же хосте
-  'https://apps.abacus.ai/routeLLM/predict/getChatResponse',
-  'https://apps.abacus.ai/predict/getChatResponse',
-  'https://apps.abacus.ai/llm/predict/getChatResponse',
-  'https://apps.abacus.ai/routeLLM/predict',
-  'https://apps.abacus.ai/predict'
-];
-
+const APPS_GET_CHAT_URL = 'https://apps.abacus.ai/api/getChatResponse';
 const DEPLOYMENT_ID = '1413dbc596';
 
 export default async function handler(req, res) {
@@ -51,67 +41,32 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
-    // Попробуем обратиться к Abacus по нескольким эндпоинтам
+    // Готовим URL строго как в curl из твоего скрина
+    const url = `${APPS_GET_CHAT_URL}?deploymentToken=${encodeURIComponent(ABACUS_DEPLOYMENT_TOKEN)}&deploymentId=${encodeURIComponent(DEPLOYMENT_ID)}`;
+
+    // Тело минимально необходимое: messages + опциональные поля
+    const body = {
+      messages: [{ is_user: true, text: userText }],
+      conversationId: String(chatId),
+      userId: String(chatId)
+      // при необходимости можно добавить: llmName, systemMessage, temperature и т.д.
+    };
+
+    console.log('Calling Abacus URL:', url);
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }, // без Authorization — токен в query
+      body: JSON.stringify(body)
+    });
+
+    const raw = await resp.text();
+    console.log('Abacus status:', resp.status, raw.slice(0, 200));
+
     let botReply = 'Извините, не удалось получить ответ.';
-    for (const baseUrl of ABACUS_ENDPOINTS) {
+    if (resp.ok) {
       try {
-        const isUniversalPredict = baseUrl.endsWith('/predict') && !baseUrl.endsWith('/getChatResponse');
-
-        // Особый случай для /api/getChatResponse: добавим query-параметры, как в твоем curl
-        const isAppsDirect = baseUrl === 'https://apps.abacus.ai/api/getChatResponse';
-        const url = isAppsDirect
-          ? `${baseUrl}?deploymentToken=${encodeURIComponent(ABACUS_DEPLOYMENT_TOKEN)}&deploymentId=${encodeURIComponent(DEPLOYMENT_ID)}`
-          : baseUrl;
-
-        // Тело запроса: стандартно messages; для universal predict — оборачиваем в methodName/args
-        const body = isUniversalPredict
-          ? {
-              methodName: 'getChatResponse',
-              args: {
-                deploymentId: DEPLOYMENT_ID,
-                messages: [{ is_user: true, text: userText }],
-                conversationId: String(chatId),
-                userId: String(chatId)
-              }
-            }
-          : {
-              deploymentId: DEPLOYMENT_ID,
-              messages: [{ is_user: true, text: userText }],
-              conversationId: String(chatId),
-              userId: String(chatId)
-            };
-
-        console.log('Trying Abacus endpoint:', url);
-
-        const headers = {
-          'Content-Type': 'application/json'
-        };
-        // Для первого варианта мы уже передаем токен в query. Для остальных — в Authorization.
-        if (!isAppsDirect) {
-          headers['Authorization'] = `Bearer ${ABACUS_DEPLOYMENT_TOKEN}`;
-        }
-
-        const resp = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(body)
-        });
-
-        const raw = await resp.text();
-        console.log('Abacus status for', url, ':', resp.status);
-
-        if (!resp.ok) {
-          console.error('Abacus non-OK', resp.status, raw.slice(0, 300));
-          continue; // пробуем следующий эндпоинт
-        }
-
-        let data = {};
-        try {
-          data = JSON.parse(raw);
-        } catch (e) {
-          console.error('Abacus JSON parse error', e, raw.slice(0, 300));
-        }
-
+        const data = JSON.parse(raw || '{}');
         const extracted =
           data?.responseText ||
           data?.text ||
@@ -120,17 +75,12 @@ export default async function handler(req, res) {
           data?.choices?.[0]?.message?.content ||
           data?.result?.text ||
           '';
-
-        if (extracted) {
-          botReply = extracted;
-          console.log('Using endpoint OK:', url);
-          break;
-        } else {
-          console.warn('No usable text field in Abacus response for', url, JSON.stringify(data).slice(0, 300));
-        }
-      } catch (err) {
-        console.error('Abacus fetch error for', baseUrl, err);
+        if (extracted) botReply = extracted;
+      } catch (e) {
+        console.error('JSON parse error:', e);
       }
+    } else {
+      console.error('Abacus non-OK', resp.status, raw.slice(0, 500));
     }
 
     await sendTg(chatId, botReply);
