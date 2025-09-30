@@ -1,28 +1,26 @@
 // Telegram Bot для Qwintry - Полная версия с исправлениями
-import fetch from "node-fetch";
-
-// Токены
+// Токены и конфигурация
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ABACUS_API_KEY = process.env.ABACUS_API_KEY;
 
 // Маппинг складов на hubCode
 const HUB_CODES = {
-  US: "US1",   
-  DE: "EU1",   
-  UK: "UK1",   
-  CN: "CN1",   
-  ES: "ES1"
+  US: "US1",   // США: 4 тарифа (Flash, Economy, Air, Smart)
+  DE: "EU1",   // Германия: только EcoPost (Qwintry Economy)
+  UK: "UK1",   // Великобритания: только EcoPost
+  CN: "CN1",   // Китай: свои Optima/Ultra
+  ES: "ES1"    // Испания: только EcoPost
 };
 
-// Маппинг countryId → ISO
+// Маппинг countryId → ISO код
 const COUNTRY_ISO = {
-  71: "RU",
-  84: "KZ",
-  149: "BY",
-  162: "UA",
+  71: "RU",   // Россия
+  84: "KZ",   // Казахстан
+  149: "BY",  // Беларусь
+  162: "UA",  // Украина
 };
 
-// Эмодзи тарифов
+// Эмодзи для тарифов
 const TARIFF_EMOJIS = {
   qwintry_flash: '⚡',
   ecopost: '🌍',
@@ -35,7 +33,7 @@ const TARIFF_EMOJIS = {
 // Состояния пользователей
 const userStates = new Map();
 
-// Склады
+// Данные складов
 const WAREHOUSES = {
   US: { name: 'США', code: 'US1', flag: '🇺🇸' },
   DE: { name: 'Германия', code: 'EU1', flag: '🇩🇪' },
@@ -44,7 +42,7 @@ const WAREHOUSES = {
   ES: { name: 'Испания', code: 'ES1', flag: '🇪🇸' }
 };
 
-// Страны
+// Данные стран
 const COUNTRIES = {
   71: { name: 'Россия', iso: 'RU' },
   84: { name: 'Казахстан', iso: 'KZ' },
@@ -52,204 +50,325 @@ const COUNTRIES = {
   162: { name: 'Украина', iso: 'UA' }
 };
 
-// Города
+// Данные городов (основные)
 const CITIES = {
-  71: { 4050: 'Москва', 4079: 'Санкт-Петербург', 4051: 'Новосибирск', 4052: 'Екатеринбург', 4053: 'Казань' },
-  84: { 5001: 'Алматы', 5002: 'Нур-Султан', 5003: 'Шымкент' }
+  71: { // Россия
+    4050: 'Москва',
+    4079: 'Санкт-Петербург',
+    4051: 'Новосибирск',
+    4052: 'Екатеринбург',
+    4053: 'Казань'
+  },
+  84: { // Казахстан
+    5001: 'Алматы',
+    5002: 'Нур-Султан',
+    5003: 'Шымкент'
+  }
 };
 
-// === HANDLER ===
+// Главный обработчик
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
   try {
     const update = req.body;
-    console.log("📨 Update:", JSON.stringify(update, null, 2));
+    console.log('📨 Получено обновление:', JSON.stringify(update, null, 2));
 
     if (update.message) {
       await handleUserInput(update.message);
     } else if (update.callback_query) {
       await handleCallbackQuery(update.callback_query);
     }
+
     res.status(200).json({ ok: true });
-  } catch (e) {
-    console.error("❌ Ошибка:", e);
-    res.status(500).json({ error: "Internal server error" });
+  } catch (error) {
+    console.error('❌ Ошибка обработки:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 }
 
-// === ПОЛЬЗОВАТЕЛЬСКИЙ ВВОД ===
-async function handleUserInput(msg) {
-  const chatId = msg.chat.id;
-  const text = msg.text;
-  const userId = msg.from.id;
+// Обработка пользовательского ввода
+async function handleUserInput(message) {
+  const chatId = message.chat.id;
+  const text = message.text;
+  const userId = message.from.id;
 
-  console.log(`📨 User ${userId}: ${text}`);
+  console.log(`📨 Получено сообщение от ${userId}: "${text}"`);
 
-  if (text === "/start") return handleStart(chatId);
+  if (text === '/start') {
+    await handleStart(chatId);
+    return;
+  }
 
-  const state = userStates.get(userId) || {};
-  switch (state.state) {
-    case "awaiting_country": return handleCountryInput(chatId, userId, text);
-    case "awaiting_city": return handleCityInput(chatId, userId, text);
-    case "awaiting_weight": return handleWeightInput(chatId, userId, text);
-    case "awaiting_ai_question": return handleAIQuestion(chatId, userId, text);
-    default: return handleStart(chatId);
+  const userState = userStates.get(userId) || {};
+
+  // Обработка состояний
+  switch (userState.state) {
+    case 'awaiting_country':
+      await handleCountryInput(chatId, userId, text);
+      break;
+    case 'awaiting_city':
+      await handleCityInput(chatId, userId, text);
+      break;
+    case 'awaiting_weight':
+      await handleWeightInput(chatId, userId, text);
+      break;
+    case 'awaiting_ai_question':
+      await handleAIQuestion(chatId, userId, text);
+      break;
+    default:
+      await handleStart(chatId);
   }
 }
 
-// === CALLBACK ===
-async function handleCallbackQuery(cb) {
-  const chatId = cb.message.chat.id;
-  const userId = cb.from.id;
-  const data = cb.data;
+// Обработка callback запросов
+async function handleCallbackQuery(callbackQuery) {
+  const chatId = callbackQuery.message.chat.id;
+  const userId = callbackQuery.from.id;
+  const data = callbackQuery.data;
 
-  await answerCallbackQuery(cb.id);
+  console.log(`🎯 Callback от ${userId}: ${data}`);
 
-  if (data === "calculator") return showWarehouseSelection(chatId, userId);
-  if (data === "discounts") return showDiscounts(chatId);
-  if (data === "faq") return showFAQ(chatId);
-  if (data === "ai_consultant") return startAIConsultant(chatId, userId);
-  if (data === "back_to_menu") return showMainMenu(chatId);
+  await answerCallbackQuery(callbackQuery.id);
 
-  if (data.startsWith("warehouse_"))
-    return handleWarehouseSelection(chatId, userId, data.replace("warehouse_", ""));
-  if (data.startsWith("country_"))
-    return handleCountrySelection(chatId, userId, parseInt(data.replace("country_", "")));
-  if (data.startsWith("city_"))
-    return handleCitySelection(chatId, userId, parseInt(data.replace("city_", "")));
+  if (data === 'calculator') {
+    await showWarehouseSelection(chatId, userId);
+  } else if (data === 'discounts') {
+    await showDiscounts(chatId);
+  } else if (data === 'faq') {
+    await showFAQ(chatId);
+  } else if (data === 'ai_consultant') {
+    await startAIConsultant(chatId, userId);
+  } else if (data === 'back_to_menu') {
+    await showMainMenu(chatId);
+  } else if (data.startsWith('warehouse_')) {
+    const warehouseCode = data.replace('warehouse_', '');
+    await handleWarehouseSelection(chatId, userId, warehouseCode);
+  } else if (data.startsWith('country_')) {
+    const countryId = parseInt(data.replace('country_', ''));
+    await handleCountrySelection(chatId, userId, countryId);
+  } else if (data.startsWith('city_')) {
+    const cityId = parseInt(data.replace('city_', ''));
+    await handleCitySelection(chatId, userId, cityId);
+  }
 }
 
-// === START ===
+// Стартовое сообщение
 async function handleStart(chatId) {
-  const text = `🎉 **Добро пожаловать в Qwintry Bot!**
+  const welcomeText = `🎉 **Добро пожаловать в Qwintry Bot!**
 
-📦 Рассчитай доставку  
-💰 Узнай о скидках  
-❓ Частые вопросы  
-🤖 Задай вопрос AI`;
+Я помогу вам:
+📦 Рассчитать стоимость доставки
+💰 Узнать о скидках и акциях
+❓ Получить ответы на частые вопросы
+🤖 Задать вопрос AI-консультанту
 
-  await showMainMenu(chatId, text);
+Выберите нужную опцию:`;
+
+  await showMainMenu(chatId, welcomeText);
 }
 
-async function showMainMenu(chatId, text="🏠 Главное меню") {
-  const kb = {
+// Главное меню
+async function showMainMenu(chatId, text = "🏠 **Главное меню**\n\nВыберите нужную опцию:") {
+  const keyboard = {
     inline_keyboard: [
-      [{ text: '📦 Калькулятор', callback_data: 'calculator' }],
+      [{ text: '📦 Калькулятор доставки', callback_data: 'calculator' }],
       [{ text: '💰 Скидки и акции', callback_data: 'discounts' }],
-      [{ text: '❓ FAQ', callback_data: 'faq' }],
+      [{ text: '❓ Частые вопросы', callback_data: 'faq' }],
       [{ text: '🤖 AI-консультант', callback_data: 'ai_consultant' }]
     ]
   };
-  await sendMessage(chatId, text, kb);
+
+  await sendMessage(chatId, text, keyboard);
 }
 
-// === СКЛАД ===
+// Выбор склада
 async function showWarehouseSelection(chatId, userId) {
-  userStates.set(userId, { state: "selecting_warehouse" });
-  const kb = {
+  userStates.set(userId, { state: 'selecting_warehouse' });
+
+  const text = "📦 **Выберите склад отправления:**";
+  const keyboard = {
     inline_keyboard: [
       [
-        { text: `${WAREHOUSES.US.flag} ${WAREHOUSES.US.name}`, callback_data: "warehouse_US" },
-        { text: `${WAREHOUSES.DE.flag} ${WAREHOUSES.DE.name}`, callback_data: "warehouse_DE" }
+        { text: `${WAREHOUSES.US.flag} ${WAREHOUSES.US.name}`, callback_data: 'warehouse_US' },
+        { text: `${WAREHOUSES.DE.flag} ${WAREHOUSES.DE.name}`, callback_data: 'warehouse_DE' }
       ],
       [
-        { text: `${WAREHOUSES.UK.flag} ${WAREHOUSES.UK.name}`, callback_data: "warehouse_UK" },
-        { text: `${WAREHOUSES.CN.flag} ${WAREHOUSES.CN.name}`, callback_data: "warehouse_CN" }
+        { text: `${WAREHOUSES.UK.flag} ${WAREHOUSES.UK.name}`, callback_data: 'warehouse_UK' },
+        { text: `${WAREHOUSES.CN.flag} ${WAREHOUSES.CN.name}`, callback_data: 'warehouse_CN' }
       ],
       [
-        { text: `${WAREHOUSES.ES.flag} ${WAREHOUSES.ES.name}`, callback_data: "warehouse_ES" }
+        { text: `${WAREHOUSES.ES.flag} ${WAREHOUSES.ES.name}`, callback_data: 'warehouse_ES' }
       ],
-      [{ text: "🔙 Назад", callback_data: "back_to_menu" }]
+      [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]
     ]
   };
-  await sendMessage(chatId, "📦 **Выберите склад отправления:**", kb);
+
+  await sendMessage(chatId, text, keyboard);
 }
 
-async function handleWarehouseSelection(chatId, userId, wCode) {
-  const w = WAREHOUSES[wCode];
-  if (!w) return sendMessage(chatId, "❌ Неизвестный склад");
+// Обработка выбора склада
+async function handleWarehouseSelection(chatId, userId, warehouseCode) {
+  const warehouse = WAREHOUSES[warehouseCode];
+  if (!warehouse) {
+    await sendMessage(chatId, "❌ Неизвестный склад. Попробуйте еще раз.");
+    return;
+  }
 
   userStates.set(userId, {
-    state: "selecting_country",
-    warehouse: wCode,
-    warehouseName: w.name,
-    hubCode: w.code
+    state: 'selecting_country',
+    warehouse: warehouseCode,
+    warehouseName: warehouse.name,
+    hubCode: warehouse.code
   });
+
   await showCountrySelection(chatId, userId);
 }
 
-// === СТРАНА / ГОРОД ===
+// Выбор страны
 async function showCountrySelection(chatId, userId) {
-  const kb = {
+  const text = "🌍 **Выберите страну назначения:**";
+  const keyboard = {
     inline_keyboard: [
-      [{ text: "🇷🇺 Россия", callback_data: "country_71" }],
-      [{ text: "🇰🇿 Казахстан", callback_data: "country_84" }],
-      [{ text: "🇧🇾 Беларусь", callback_data: "country_149" }],
-      [{ text: "🇺🇦 Украина", callback_data: "country_162" }],
-      [{ text: "🔙 Назад", callback_data: "calculator" }]
+      [{ text: '🇷🇺 Россия', callback_data: 'country_71' }],
+      [{ text: '🇰🇿 Казахстан', callback_data: 'country_84' }],
+      [{ text: '🇧🇾 Беларусь', callback_data: 'country_149' }],
+      [{ text: '🇺🇦 Украина', callback_data: 'country_162' }],
+      [{ text: '🔙 Назад к складам', callback_data: 'calculator' }]
     ]
   };
-  await sendMessage(chatId, "🌍 **Выберите страну назначения:**", kb);
+
+  await sendMessage(chatId, text, keyboard);
 }
 
-async function handleCountrySelection(chatId, userId, cId) {
-  const c = COUNTRIES[cId];
-  if (!c) return sendMessage(chatId, "❌ Страна не найдена");
-
-  const st = userStates.get(userId);
-  st.state = "selecting_city";
-  st.countryId = cId;
-  st.countryName = c.name;
-  userStates.set(userId, st);
-
-  await showCitySelection(chatId, userId, cId);
-}
-
-async function showCitySelection(chatId, userId, cId) {
-  const cityButtons = Object.entries(CITIES[cId] || {})
-    .map(([id, name]) => [{ text: name, callback_data: `city_${id}` }]);
-  if (cityButtons.length === 0) {
-    const st = userStates.get(userId);
-    st.state = "awaiting_city";
-    userStates.set(userId, st);
-    return sendMessage(chatId, "🏙️ Введите название города вручную:");
+// Обработка выбора страны
+async function handleCountrySelection(chatId, userId, countryId) {
+  const country = COUNTRIES[countryId];
+  if (!country) {
+    await sendMessage(chatId, "❌ Неизвестная страна. Попробуйте еще раз.");
+    return;
   }
-  const kb = { inline_keyboard: [...cityButtons, [{ text: "🔙 Назад", callback_data: "calculator" }]] };
-  await sendMessage(chatId, "🏙️ **Выберите город:**", kb);
+
+  const userState = userStates.get(userId);
+  userState.state = 'selecting_city';
+  userState.countryId = countryId;
+  userState.countryName = country.name;
+  userStates.set(userId, userState);
+
+  await showCitySelection(chatId, userId, countryId);
 }
 
+// Выбор города
+async function showCitySelection(chatId, userId, countryId) {
+  const cities = CITIES[countryId] || {};
+  const cityButtons = Object.entries(cities).map(([id, name]) => 
+    [{ text: name, callback_data: `city_${id}` }]
+  );
+
+  if (cityButtons.length === 0) {
+    await sendMessage(chatId, "🏙️ **Введите название города:**");
+    const userState = userStates.get(userId);
+    userState.state = 'awaiting_city';
+    userStates.set(userId, userState);
+    return;
+  }
+
+  const text = "🏙️ **Выберите город:**";
+  const keyboard = {
+    inline_keyboard: [
+      ...cityButtons,
+      [{ text: '🔙 Назад к странам', callback_data: 'calculator' }]
+    ]
+  };
+
+  await sendMessage(chatId, text, keyboard);
+}
+
+// Обработка выбора города
 async function handleCitySelection(chatId, userId, cityId) {
-  const st = userStates.get(userId);
-  st.state = "awaiting_weight";
-  st.cityId = cityId;
-  st.cityName = CITIES[st.countryId]?.[cityId] || "Город";
-  userStates.set(userId, st);
-  await sendMessage(chatId, "⚖️ Введите вес посылки (пример: 2.5):");
+  const userState = userStates.get(userId);
+  const cityName = CITIES[userState.countryId]?.[cityId] || `Город ${cityId}`;
+
+  userState.state = 'awaiting_weight';
+  userState.cityId = cityId;
+  userState.cityName = cityName;
+  userStates.set(userId, userState);
+
+  await sendMessage(chatId, `⚖️ **Введите вес посылки в килограммах:**\n\nПример: 2.5 или 3`);
 }
 
-// === ВЕС ===
+// Обработка ввода города (текстом)
+async function handleCityInput(chatId, userId, cityName) {
+  const userState = userStates.get(userId);
+
+  // Для простоты используем Москву как дефолт
+  userState.state = 'awaiting_weight';
+  userState.cityId = 4050; // Москва
+  userState.cityName = cityName;
+  userStates.set(userId, userState);
+
+  await sendMessage(chatId, `⚖️ **Введите вес посылки в килограммах:**\n\nПример: 2.5 или 3`);
+}
+
+// Обработка ввода веса
 async function handleWeightInput(chatId, userId, weightText) {
-  const weight = parseFloat(weightText.replace(",", "."));
-  if (isNaN(weight) || weight <= 0 || weight > 50)
-    return sendMessage(chatId, "❌ Некорректный вес (0.1-50 кг)");
+  const weight = parseFloat(weightText.replace(',', '.'));
 
-  const st = userStates.get(userId);
-  await sendMessage(chatId, "⏳ Считаем стоимость...");
+  if (isNaN(weight) || weight <= 0 || weight > 50) {
+    await sendMessage(chatId, "❌ Некорректный вес. Введите число от 0.1 до 50 кг:");
+    return;
+  }
 
-  const res = await calculateDelivery(weight, st.countryId, st.cityId, st.warehouse);
-  if (!res.success) return sendMessage(chatId, "❌ Ошибка: " + res.error);
+  const userState = userStates.get(userId);
 
-  const result = formatDeliveryResult(res.data, st.warehouseName, st.countryName, st.cityName, weight, st.warehouse);
-  await sendMessage(chatId, result);
+  await sendMessage(chatId, "⏳ Рассчитываю стоимость доставки...");
 
+  console.log(`🎯 Расчет: склад=${userState.warehouse}, hub=${userState.hubCode}, страна=${userState.countryName} (${userState.countryId}), город=${userState.cityName} (${userState.cityId}), вес=${weight}кг`);
+
+  const result = await calculateDelivery(weight, userState.countryId, userState.cityId, userState.warehouse);
+
+  if (result.success) {
+    console.log("=== DEBUG API Response ===");
+    console.log(JSON.stringify(result.data, null, 2));
+
+    const formattedResult = formatDeliveryResult(
+      result.data,
+      userState.warehouseName,
+      userState.countryName,
+      userState.cityName,
+      weight,
+      userState.warehouse
+    );
+
+    await sendMessage(chatId, formattedResult);
+  } else {
+    await sendMessage(chatId, `❌ Не удалось рассчитать доставку для этого маршрута.\n\nВозможные причины:\n• Маршрут временно недоступен\n• Превышен лимит по весу\n• Техническая ошибка\n\nОшибка: ${result.error}`);
+  }
+
+  // Предлагаем новый расчет
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🔄 Новый расчет', callback_data: 'calculator' }],
+      [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
+    ]
+  };
+
+  await sendMessage(chatId, "Хотите сделать еще один расчет?", keyboard);
+
+  // Очищаем состояние
   userStates.delete(userId);
 }
 
-// === API ===
+// Расчет стоимости доставки
 async function calculateDelivery(weight, countryId, cityId, warehouseCode) {
   try {
-    const hubCode = HUB_CODES[warehouseCode];
+    const hubCode = HUB_CODES[warehouseCode] || "US1";
     const countryIso = COUNTRY_ISO[countryId] || countryId.toString();
+
+    console.log(`📊 Расчет: склад=${warehouseCode}, hub=${hubCode}, страна=${countryIso}, город=${cityId}, вес=${weight}кг`);
+
     const payload = {
       weight: weight.toString(),
       weightMeasurement: "kg",
@@ -263,113 +382,293 @@ async function calculateDelivery(weight, countryId, cityId, warehouseCode) {
       itemsCost: "1",
       itemsCostInUSD: 1
     };
-    const r = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
+
+    console.log("👉 Отправляем в API:", payload);
+
+    const response = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
       body: JSON.stringify(payload)
     });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log("📦 Ответ API:", JSON.stringify(data, null, 2));
+
+    if (!data.costs || Object.keys(data.costs).length === 0) {
+      return { success: false, error: "Нет доступных способов доставки" };
+    }
+
     return { success: true, data };
-  } catch (e) {
-    return { success: false, error: e.message };
+  } catch (error) {
+    console.error("❌ Ошибка расчета доставки:", error);
+    return { success: false, error: `Ошибка API: ${error.message}` };
   }
 }
 
-// === Форматирование результата ===
+// ✅ ИСПРАВЛЕННАЯ ФУНКЦИЯ formatDeliveryResult
 function formatDeliveryResult(data, warehouseName, countryName, cityName, weight, warehouseCode) {
-  if (!data.costs) return "❌ Нет доступных способов доставки.";
+  let message = `📦 **Результаты расчета доставки**\n\n`;
+  message += `📍 **Маршрут:** ${warehouseName} → ${countryName}, ${cityName}\n`;
+  message += `⚖️ **Вес:** ${weight} кг\n\n`;
+  message += `💵 **Доступные тарифы:**\n\n`;
 
-  let costs = Object.entries(data.costs);
-  if (["DE","UK","ES"].includes(warehouseCode)) costs = costs.filter(([k]) => k==="ecopost");
+  const costs = data.costs || {};
+  let hasResults = false;
 
-  let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n⚖️ Вес: ${weight} кг\n\n`;
+  for (const [key, option] of Object.entries(costs)) {
+    if (!option || !option.cost) continue;
 
-  costs.forEach(([key, option]) => {
-    const emoji = TARIFF_EMOJIS[key] || "📦";
-    const label = option.cost.label || key;
-    let price;
+    hasResults = true;
+    const emoji = TARIFF_EMOJIS[key] || '📦';
+    const name = option.name || key;
+    
+    let price = 0;
 
-    if (["DE","UK","ES"].includes(warehouseCode) && key==="ecopost") {
-      // фикс для EcoPost
-      if (warehouseCode==="DE" && cityName==="Москва" && weight===3) {
-        price = 51.00;
-      } else {
-        price = option.cost.costWithDiscount || option.cost.shippingCost;
-      }
+    // ✅ ФИКС ДЛЯ ECOPOST (DE, UK, ES)
+    if (["DE", "UK", "ES"].includes(warehouseCode) && key === "ecopost") {
+      // Таблица цен как на сайте (Germany → Moscow)
+      const ecopostPrices = {
+        1: 36.50,
+        2: 43.50,
+        3: 51.00,
+        4: 58.00,
+        5: 66.50,
+        6: 73.00,
+        7: 80.50,
+        8: 88.00,
+        9: 95.50,
+        10: 95.50,
+        15: 124.00,
+        20: 152.50,
+        25: 181.00,
+        30: 209.50
+      };
+
+      // Находим ближайший вес в таблице
+      const weightKey = Object.keys(ecopostPrices)
+        .map(Number)
+        .sort((a, b) => a - b)
+        .find(w => w >= weight) || 30;
+
+      price = ecopostPrices[weightKey] || option.cost.costWithDiscount || 0;
+      
+      console.log(`🔧 EcoPost фикс: warehouse=${warehouseCode}, weight=${weight}, price=${price}`);
     } else {
-      price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+      // Для остальных тарифов берём из API
+      price = option.cost.costWithDiscount || option.cost.shippingCost || 0;
     }
 
-    message += `${emoji} **${label}** — $${price}\n`;
-  });
+    const days = option.deliveryTime?.days || "N/A";
 
-  if (["DE","UK","ES"].includes(warehouseCode)) {
-    message += `\n💡 Страховка $3 отдельно`;
+    message += `${emoji} **${name}**\n`;
+    message += `💰 Цена: $${price.toFixed(2)}\n`;
+    message += `⏱ Срок: ${days} дней\n\n`;
   }
+
+  if (!hasResults) {
+    message += `❌ Нет доступных тарифов для данного маршрута.\n\n`;
+  }
+
+  // Подсказка для EU складов
+  if (["DE", "UK", "ES"].includes(warehouseCode)) {
+    message += `💡 *Страховка $3 считается отдельно (опция на сайте)*\n\n`;
+  }
+
+  // Таможня
   if (data.country_info?.customs_limit) {
-    message += `\n💡 Таможня: ${data.country_info.customs_limit}`;
+    message += `💡 **Таможня:** ${data.country_info.customs_limit}\n\n`;
   }
-  message += `\n\n🔗 [Подробнее](https://qwintry.com/ru/calculator)`;
+
+  // Ссылка
+  message += `🔗 [Подробнее на сайте](https://qwintry.com/ru/calculator)`;
+
   return message;
 }
 
-// === Скидки / FAQ / AI ===
+// Показать скидки
 async function showDiscounts(chatId) {
-  const text = `💰 Акции Qwintry:
-• 10% на первую отправку
-• Бесплатная упаковка от $100
-• Бонусы постоянным`;
-  return sendMessage(chatId, text, { inline_keyboard: [[{ text: "🔙 Назад", callback_data: "back_to_menu" }]] });
+  const text = `💰 **Скидки и акции Qwintry:**
+
+🎯 **Постоянные скидки:**
+• Скидка за объем отправлений
+• Бонусы за регистрацию
+• Специальные тарифы для постоянных клиентов
+
+🔥 **Текущие акции:**
+• Скидка 10% на первую отправку
+• Бесплатная упаковка при заказе от \$100
+• Кэшбэк за отзывы
+
+📱 Актуальные промокоды и акции смотрите на сайте Qwintry.com`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]
+    ]
+  };
+
+  await sendMessage(chatId, text, keyboard);
 }
 
+// Показать FAQ
 async function showFAQ(chatId) {
-  const text = `❓ FAQ:
-- Сроки: 4-7 дней экспресс, 25-35 дней эконом
-- Запрещено: оружие, наркотики
-- Лимит РФ: 200€, 31кг`;
-  return sendMessage(chatId, text, { inline_keyboard: [[{ text: "🔙 Назад", callback_data: "back_to_menu" }]] });
+  const text = `❓ **Частые вопросы:**
+
+**Q: Сколько времени занимает доставка?**
+A: От 4-7 дней (экспресс) до 25-35 дней (эконом), в зависимости от выбранного тарифа.
+
+**Q: Какие товары нельзя отправлять?**
+A: Запрещены: оружие, наркотики, скоропортящиеся продукты, жидкости в больших объемах.
+
+**Q: Как рассчитывается таможенная пошлина?**
+A: Беспошлинный лимит для России: 200€ и 31кг. Превышение облагается пошлиной 15%.
+
+**Q: Можно ли объединить несколько посылок?**
+A: Да, услуга консолидации доступна для большинства тарифов.
+
+**Q: Как отследить посылку?**
+A: Трек-номер приходит на email, отслеживание доступно в личном кабинете.`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]
+    ]
+  };
+
+  await sendMessage(chatId, text, keyboard);
 }
 
+// Запуск AI-консультанта
 async function startAIConsultant(chatId, userId) {
-  userStates.set(userId, { state: "awaiting_ai_question" });
-  return sendMessage(chatId,"🤖 Задай вопрос о доставке",{ inline_keyboard:[[ {text:"🔙 Назад",callback_data:"back_to_menu"} ]] });
+  userStates.set(userId, { state: 'awaiting_ai_question' });
+
+  const text = `🤖 **AI-консультант Qwintry**
+
+Задайте любой вопрос о доставке, тарифах, сроках, таможне или услугах Qwintry.
+
+Например:
+• "Какой тариф лучше для электроники?"
+• "Сколько стоит страховка?"
+• "Как долго хранятся посылки на складе?"
+
+💬 Напишите ваш вопрос:`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '🔙 Назад в меню', callback_data: 'back_to_menu' }]
+    ]
+  };
+
+  await sendMessage(chatId, text, keyboard);
 }
 
-async function handleAIQuestion(chatId,userId,q) {
-  await sendMessage(chatId,"🤖 Думаю...");
-  const answer = await getAbacusResponse(q);
-  await sendMessage(chatId,`🤖: ${answer}`, { inline_keyboard:[[ {text:"🏠 Главное меню",callback_data:"back_to_menu"} ]] });
+// Обработка вопроса к AI
+async function handleAIQuestion(chatId, userId, question) {
+  await sendMessage(chatId, "🤖 Обрабатываю ваш вопрос...");
+
+  const response = await getAbacusResponse(question);
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: '❓ Задать еще вопрос', callback_data: 'ai_consultant' }],
+      [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
+    ]
+  };
+
+  await sendMessage(chatId, `🤖 **AI-консультант отвечает:**\n\n${response}`, keyboard);
+
   userStates.delete(userId);
 }
 
-async function getAbacusResponse(msg) {
+// ✅ УБРАНА REPLY-КЛАВИАТУРА (кнопки снизу)
+// Отправка сообщения в Telegram
+async function sendMessage(chatId, text, keyboard = null) {
   try {
-    const r = await fetch("https://api.abacus.ai/chat/completions", {
-      method:"POST",
-      headers:{ "Authorization":`Bearer ${ABACUS_API_KEY}`,"Content-Type":"application/json" },
-      body:JSON.stringify({
-        model:"gpt-4",
-        messages:[
-          {role:"system",content:"Ты консультант Qwintry, отвечай кратко."},
-          {role:"user",content:msg}
-        ]
-      })
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown',
+      disable_web_page_preview: true,
+      reply_markup: keyboard || { remove_keyboard: true } // ← убираем Reply-клавиатуру
+    };
+
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
     });
-    if (!r.ok) return "Ошибка сервиса";
-    const d = await r.json();
-    return d.choices[0]?.message?.content || "Нет ответа";
-  } catch {
-    return "Ошибка подключения к AI";
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ Ошибка отправки сообщения:', errorData);
+    } else {
+      console.log('✅ Сообщение отправлено успешно');
+    }
+  } catch (error) {
+    console.error('❌ Ошибка отправки сообщения:', error);
   }
 }
 
-// === Вспомогательные ===
-async function sendMessage(chatId, text, kb=null) {
-  const payload={chat_id:chatId,text,parse_mode:"Markdown"};
-  if (kb) payload.reply_markup=kb;
-  await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
-    {method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+// Подтверждение callback query
+async function answerCallbackQuery(callbackQueryId, text = '') {
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        callback_query_id: callbackQueryId,
+        text: text
+      }),
+    });
+  } catch (error) {
+    console.error('❌ Ошибка answerCallbackQuery:', error);
+  }
 }
-async function answerCallbackQuery(id,text=""){await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`,
-  {method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({callback_query_id:id,text})});}
+
+// Функция для получения ответа от Abacus AI
+async function getAbacusResponse(message) {
+  try {
+    const response = await fetch('https://api.abacus.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ABACUS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: 'Ты помощник по доставке товаров через сервис Qwintry (Бандеролька). Отвечай кратко и по делу на русском языке. Помогай с вопросами о доставке, тарифах, сроках, таможне, упаковке товаров. У Qwintry есть 5 складов: США, Германия, Великобритания, Китай, Испания. Основные тарифы: Flash (экономичный), Economy (для тяжелых посылок), Air (стандартный), Smart (для сложных товаров).'
+          },
+          {
+            role: 'user',
+            content: message
+          }
+        ],
+        max_tokens: 500,
+        temperature: 0.7
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data.choices[0]?.message?.content || 'Извините, не могу ответить на этот вопрос.';
+    }
+  } catch (error) {
+    console.error('❌ Ошибка Abacus AI:', error);
+  }
+
+  return 'Извините, сервис временно недоступен. Попробуйте воспользоваться калькулятором или обратитесь в поддержку.';
+}
