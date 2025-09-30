@@ -16,46 +16,82 @@ const WAREHOUSES = {
   '5': { code: 'ES1', name: 'Испания' }
 };
 
+// 🔥 ЖЁСТКИЙ FALLBACK для популярных стран с реальными ID из Qwintry
+const HARDCODED_COUNTRIES = {
+  'RU': { id: 236, name: 'Россия', code: 'RU' },
+  'KZ': { id: 398, name: 'Казахстан', code: 'KZ' },
+  'BY': { id: 112, name: 'Беларусь', code: 'BY' },
+  'UA': { id: 804, name: 'Украина', code: 'UA' },
+  'DE': { id: 276, name: 'Германия', code: 'DE' },
+  'US': { id: 840, name: 'США', code: 'US' },
+  'CN': { id: 156, name: 'Китай', code: 'CN' },
+  'ES': { id: 724, name: 'Испания', code: 'ES' },
+  'GB': { id: 826, name: 'Великобритания', code: 'GB' },
+  'AU': { id: 36, name: 'Австралия', code: 'AU' },
+  'FR': { id: 250, name: 'Франция', code: 'FR' },
+  'IT': { id: 380, name: 'Италия', code: 'IT' },
+  'PL': { id: 616, name: 'Польша', code: 'PL' },
+  'TR': { id: 792, name: 'Турция', code: 'TR' },
+  'JP': { id: 392, name: 'Япония', code: 'JP' }
+};
+
 // Алиасы популярных стран: ключи — русские и английские варианты, значения — ISO-код
 const COUNTRY_ALIAS_TO_CODE = {
+  // Россия
   'россия': 'RU',
   'russia': 'RU',
   'ru': 'RU',
   'russian federation': 'RU',
+  '236': 'RU',
 
+  // Казахстан
   'казахстан': 'KZ',
   'kazakhstan': 'KZ',
   'kz': 'KZ',
+  '398': 'KZ',
 
+  // Беларусь
   'беларусь': 'BY',
   'белоруссия': 'BY',
   'belarus': 'BY',
   'by': 'BY',
+  '112': 'BY',
 
+  // Украина
   'украина': 'UA',
   'ukraine': 'UA',
   'ua': 'UA',
+  '804': 'UA',
 
+  // Германия
   'германия': 'DE',
   'germany': 'DE',
   'deutschland': 'DE',
   'de': 'DE',
+  '276': 'DE',
 
+  // США
   'сша': 'US',
   'united states': 'US',
   'usa': 'US',
   'us': 'US',
   'america': 'US',
   'united states of america': 'US',
+  '840': 'US',
 
+  // Китай
   'китай': 'CN',
   'china': 'CN',
   'cn': 'CN',
+  '156': 'CN',
 
+  // Испания
   'испания': 'ES',
   'spain': 'ES',
   'es': 'ES',
+  '724': 'ES',
 
+  // Великобритания
   'великобритания': 'GB',
   'united kingdom': 'GB',
   'great britain': 'GB',
@@ -66,10 +102,73 @@ const COUNTRY_ALIAS_TO_CODE = {
   'scotland': 'GB',
   'wales': 'GB',
   'northern ireland': 'GB',
+  '826': 'GB',
 
+  // Австралия
   'австралия': 'AU',
   'australia': 'AU',
-  'au': 'AU'
+  'au': 'AU',
+  '36': 'AU',
+
+  // Франция
+  'франция': 'FR',
+  'france': 'FR',
+  'fr': 'FR',
+  '250': 'FR',
+
+  // Италия
+  'италия': 'IT',
+  'italy': 'IT',
+  'it': 'IT',
+  '380': 'IT',
+
+  // Польша
+  'польша': 'PL',
+  'poland': 'PL',
+  'pl': 'PL',
+  '616': 'PL',
+
+  // Турция
+  'турция': 'TR',
+  'turkey': 'TR',
+  'tr': 'TR',
+  '792': 'TR',
+
+  // Япония
+  'япония': 'JP',
+  'japan': 'JP',
+  'jp': 'JP',
+  '392': 'JP'
+};
+
+// Fallback для популярных городов (если API не отвечает)
+const HARDCODED_CITIES = {
+  236: { // Россия
+    'москва': { id: 524901, name: 'Москва' },
+    'moscow': { id: 524901, name: 'Москва' },
+    'санкт-петербург': { id: 498817, name: 'Санкт-Петербург' },
+    'saint petersburg': { id: 498817, name: 'Санкт-Петербург' },
+    'спб': { id: 498817, name: 'Санкт-Петербург' },
+    'екатеринбург': { id: 1486209, name: 'Екатеринбург' },
+    'новосибирск': { id: 1496747, name: 'Новосибирск' }
+  },
+  398: { // Казахстан
+    'алматы': { id: 1526273, name: 'Алматы' },
+    'almaty': { id: 1526273, name: 'Алматы' },
+    'астана': { id: 1526384, name: 'Нур-Султан' },
+    'нур-султан': { id: 1526384, name: 'Нур-Султан' },
+    'nur-sultan': { id: 1526384, name: 'Нур-Султан' }
+  },
+  112: { // Беларусь
+    'минск': { id: 625144, name: 'Минск' },
+    'minsk': { id: 625144, name: 'Минск' }
+  },
+  804: { // Украина
+    'киев': { id: 703448, name: 'Киев' },
+    'kiev': { id: 703448, name: 'Киев' },
+    'харьков': { id: 706483, name: 'Харьков' },
+    'одесса': { id: 698740, name: 'Одесса' }
+  }
 };
 
 // Простейший кэш стран на время жизни функции (serverless warm)
@@ -331,86 +430,119 @@ async function getCountries() {
   }
 }
 
-// Поиск страны: поддержка рус/англ, ISO, частичных, числового ID
+// 🔥 УЛУЧШЕННЫЙ поиск страны с жёстким fallback
 async function findCountry(input) {
-  const countries = await getCountries();
-  if (!countries || countries.length === 0) return null;
-
   const inputRaw = String(input).trim();
   const inputLower = norm(inputRaw);
 
-  // 1) Если ввели числовой ID
-  if (/^\d+$/.test(inputLower)) {
-    const idNum = parseInt(inputLower, 10);
-    const byId = countries.find(c => Number(c?.id) === idNum);
-    if (byId) {
-      const name = byId.name || byId.name_en || byId.name_ru || byId.title || `#${byId.id}`;
-      console.log(`Found country by numeric id: ${name} (${byId.id})`);
-      return { id: byId.id, name };
-    }
-  }
+  console.log(`🔍 Searching country for: "${inputRaw}"`);
 
-  // 2) Алиасы: RU/Россия/Russia/... -> ISO-код
+  // 1️⃣ ПРИОРИТЕТ: Проверяем алиасы (включая числовые ID)
   const isoFromAlias = COUNTRY_ALIAS_TO_CODE[inputLower];
   if (isoFromAlias) {
-    // ищем страну по коду
-    const byCode = countries.find(c => {
-      const code = (c.code || c.alpha2 || c.iso || c.country_code || '').toUpperCase();
-      return code === isoFromAlias;
-    });
-    if (byCode) {
-      const name = byCode.name || byCode.name_en || byCode.name_ru || byCode.title || isoFromAlias;
-      console.log(`Found country by alias ${inputRaw} → ${isoFromAlias} → ${name} (${byCode.id})`);
-      return { id: byCode.id, name };
+    const hardcoded = HARDCODED_COUNTRIES[isoFromAlias];
+    if (hardcoded) {
+      console.log(`✅ Found via alias: ${inputRaw} → ${isoFromAlias} → ${hardcoded.name} (${hardcoded.id})`);
+      return { id: hardcoded.id, name: hardcoded.name };
     }
   }
 
-  // 3) Прямое точное совпадение по коду (если ввели RU/KZ/...)
+  // 2️⃣ Прямая проверка ISO-кода в жёстком списке
   if (/^[A-Za-z]{2}$/.test(inputRaw)) {
     const isoUpper = inputRaw.toUpperCase();
-    const byCode = countries.find(c => {
-      const code = (c.code || c.alpha2 || c.iso || c.country_code || '').toUpperCase();
-      return code === isoUpper;
-    });
-    if (byCode) {
-      const name = byCode.name || byCode.name_en || byCode.name_ru || byCode.title || isoUpper;
-      console.log(`Found country by ISO code ${isoUpper}: ${name} (${byCode.id})`);
-      return { id: byCode.id, name };
+    const hardcoded = HARDCODED_COUNTRIES[isoUpper];
+    if (hardcoded) {
+      console.log(`✅ Found via ISO: ${isoUpper} → ${hardcoded.name} (${hardcoded.id})`);
+      return { id: hardcoded.id, name: hardcoded.name };
     }
   }
 
-  // 4) Поиск по названиям: name/name_en/name_ru/title
-  const byNameExact = countries.find(c => {
-    const fields = [
-      c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
-    ].filter(Boolean).map(norm);
-    return fields.includes(inputLower);
-  });
-  if (byNameExact) {
-    const name = byNameExact.name || byNameExact.name_en || byNameExact.name_ru || byNameExact.title || inputRaw;
-    console.log(`Found country by exact name: ${name} (${byNameExact.id})`);
-    return { id: byNameExact.id, name };
+  // 3️⃣ Числовой ID в жёстком списке
+  if (/^\d+$/.test(inputLower)) {
+    const idNum = parseInt(inputLower, 10);
+    const hardcoded = Object.values(HARDCODED_COUNTRIES).find(c => c.id === idNum);
+    if (hardcoded) {
+      console.log(`✅ Found via numeric ID: ${idNum} → ${hardcoded.name}`);
+      return { id: hardcoded.id, name: hardcoded.name };
+    }
   }
 
-  // 5) Частичное совпадение (вхождение)
-  const byNamePartial = countries.find(c => {
-    const fields = [
-      c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
-    ].filter(Boolean).map(norm);
-    return fields.some(f => f.includes(inputLower) || inputLower.includes(f));
-  });
-  if (byNamePartial) {
-    const name = byNamePartial.name || byNamePartial.name_en || byNamePartial.name_ru || byNamePartial.title || inputRaw;
-    console.log(`Found country by partial: ${name} (${byNamePartial.id})`);
-    return { id: byNamePartial.id, name };
+  // 4️⃣ Попытка через API (если доступен)
+  const countries = await getCountries();
+  if (countries && countries.length > 0) {
+    // Числовой ID через API
+    if (/^\d+$/.test(inputLower)) {
+      const idNum = parseInt(inputLower, 10);
+      const byId = countries.find(c => Number(c?.id) === idNum);
+      if (byId) {
+        const name = byId.name || byId.name_en || byId.name_ru || byId.title || `#${byId.id}`;
+        console.log(`✅ Found via API numeric ID: ${name} (${byId.id})`);
+        return { id: byId.id, name };
+      }
+    }
+
+    // ISO-код через API
+    if (/^[A-Za-z]{2}$/.test(inputRaw)) {
+      const isoUpper = inputRaw.toUpperCase();
+      const byCode = countries.find(c => {
+        const code = (c.code || c.alpha2 || c.iso || c.country_code || '').toUpperCase();
+        return code === isoUpper;
+      });
+      if (byCode) {
+        const name = byCode.name || byCode.name_en || byCode.name_ru || byCode.title || isoUpper;
+        console.log(`✅ Found via API ISO: ${isoUpper} → ${name} (${byCode.id})`);
+        return { id: byCode.id, name };
+      }
+    }
+
+    // Точное совпадение по названию через API
+    const byNameExact = countries.find(c => {
+      const fields = [
+        c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
+      ].filter(Boolean).map(norm);
+      return fields.includes(inputLower);
+    });
+    if (byNameExact) {
+      const name = byNameExact.name || byNameExact.name_en || byNameExact.name_ru || byNameExact.title || inputRaw;
+      console.log(`✅ Found via API exact name: ${name} (${byNameExact.id})`);
+      return { id: byNameExact.id, name };
+    }
+
+    // Частичное совпадение через API
+    const byNamePartial = countries.find(c => {
+      const fields = [
+        c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
+      ].filter(Boolean).map(norm);
+      return fields.some(f => f.includes(inputLower) || inputLower.includes(f));
+    });
+    if (byNamePartial) {
+      const name = byNamePartial.name || byNamePartial.name_en || byNamePartial.name_ru || byNamePartial.title || inputRaw;
+      console.log(`✅ Found via API partial: ${name} (${byNamePartial.id})`);
+      return { id: byNamePartial.id, name };
+    }
+  } else {
+    console.log(`⚠️ API countries not available, using hardcoded only`);
   }
 
-  console.log(`Country not found for input: "${inputRaw}"`);
+  console.log(`❌ Country not found: "${inputRaw}"`);
   return null;
 }
 
-// Поиск города через API Qwintry
+// 🔥 УЛУЧШЕННЫЙ поиск города с fallback
 async function findCity(countryId, cityName) {
+  const cityNorm = norm(cityName);
+  
+  console.log(`🔍 Searching city "${cityName}" in country ${countryId}`);
+
+  // 1️⃣ Проверяем жёсткий fallback для популярных городов
+  const hardcodedCities = HARDCODED_CITIES[countryId];
+  if (hardcodedCities && hardcodedCities[cityNorm]) {
+    const city = hardcodedCities[cityNorm];
+    console.log(`✅ Found via hardcoded: ${city.name} (${city.id})`);
+    return { id: city.id, name: city.name };
+  }
+
+  // 2️⃣ Поиск через API
   try {
     const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/cities', {
       method: 'POST',
@@ -428,15 +560,14 @@ async function findCity(countryId, cityName) {
 
     const cities = await resp.json();
     if (!Array.isArray(cities) || cities.length === 0) {
-      console.log(`No cities found for "${cityName}" in country ${countryId}`);
+      console.log(`❌ No cities found via API for "${cityName}" in country ${countryId}`);
       return null;
     }
 
-    // Предпочтительно точное совпадение по названию (без учета регистра), иначе первый
-    const cityNorm = norm(cityName);
+    // Предпочтительно точное совпадение по названию, иначе первый
     const exact = cities.find(c => norm(c.name) === cityNorm) || cities[0];
 
-    console.log(`Found city: ${exact.name} (ID: ${exact.id}) in country ${countryId}`);
+    console.log(`✅ Found via API: ${exact.name} (ID: ${exact.id}) in country ${countryId}`);
     return { id: exact.id, name: exact.name };
 
   } catch (e) {
