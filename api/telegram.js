@@ -212,17 +212,14 @@ export default async function handler(req, res) {
     // Команда /calc - запускаем пошаговый расчёт
     if (userText === '/calc') {
       userStates[chatId] = { step: 'warehouse' };
-      await sendTg(chatId, `📦 Калькулятор доставки
+      await sendTg(chatId, getWarehouseQuestion());
+      return res.status(200).send('OK');
+    }
 
-Выберите склад отправления (введите номер):
-
-1️⃣ США
-2️⃣ Германия  
-3️⃣ Великобритания
-4️⃣ Китай
-5️⃣ Испания
-
-Например: 1`);
+    // Команда /cancel - сброс состояния
+    if (userText === '/cancel') {
+      delete userStates[chatId];
+      await sendTg(chatId, '❌ Калькулятор сброшен. Для нового расчёта используйте /calc');
       return res.status(200).send('OK');
     }
 
@@ -279,12 +276,43 @@ export default async function handler(req, res) {
 
 // ----------------- helpers -----------------
 
+function getWarehouseQuestion() {
+  return `📦 Калькулятор доставки
+
+Выберите склад отправления (введите номер):
+
+1️⃣ США
+2️⃣ Германия  
+3️⃣ Великобритания
+4️⃣ Китай
+5️⃣ Испания
+
+Например: 1
+
+💡 Для отмены используйте /cancel`;
+}
+
 // Пошаговый калькулятор
 async function handleCalcConversation(chatId, text) {
   const state = userStates[chatId] || {};
+  const command = text.trim();
+
+  // ✅ Сброс сценария если пришла команда /calc
+  if (command === '/calc') {
+    userStates[chatId] = { step: 'warehouse' };
+    await sendTg(chatId, getWarehouseQuestion());
+    return;
+  }
+
+  // ✅ /cancel в любой момент
+  if (command === '/cancel') {
+    delete userStates[chatId];
+    await sendTg(chatId, '❌ Калькулятор сброшен. Для нового расчёта используйте /calc');
+    return;
+  }
 
   if (state.step === 'warehouse') {
-    const warehouseNum = text.trim();
+    const warehouseNum = command;
     if (!WAREHOUSES[warehouseNum]) {
       await sendTg(chatId, `❌ Неверный номер склада. Выберите от 1 до 5:
 
@@ -294,7 +322,7 @@ async function handleCalcConversation(chatId, text) {
 4️⃣ Китай
 5️⃣ Испания
 
-Попробуйте ещё раз:`);
+💡 Для отмены используйте /cancel`);
       return;
     }
     state.warehouse = WAREHOUSES[warehouseNum];
@@ -309,11 +337,11 @@ async function handleCalcConversation(chatId, text) {
 • Код страны: RU, KZ, BY
 • Можно даже ID (например, 236 для России)
 
-Напишите страну:`);
+💡 Для отмены используйте /cancel`);
   } else if (state.step === 'country') {
-    const countryInput = text.trim();
+    const countryInput = command;
     if (countryInput.length < 2) {
-      await sendTg(chatId, '❌ Введите название страны / код / ID (например: Россия, Russia, RU или 236)');
+      await sendTg(chatId, '❌ Введите название страны / код / ID (например: Россия, Russia, RU или 236)\n\n💡 Для отмены используйте /cancel');
       return;
     }
 
@@ -330,7 +358,7 @@ async function handleCalcConversation(chatId, text) {
 • Украина / Ukraine / UA
 • Германия / Germany / DE
 
-Введите название ещё раз:`);
+💡 Для отмены используйте /cancel`);
       return;
     }
 
@@ -342,11 +370,11 @@ async function handleCalcConversation(chatId, text) {
 
 Например: Москва, Алматы, Минск, Киев, Берлин и т.д.
 
-Напишите название города:`);
+💡 Для отмены используйте /cancel`);
   } else if (state.step === 'city') {
-    const cityName = text.trim();
+    const cityName = command;
     if (cityName.length < 2) {
-      await sendTg(chatId, '❌ Введите название города (например: Москва, Алматы, Минск)');
+      await sendTg(chatId, '❌ Введите название города (например: Москва, Алматы, Минск)\n\n💡 Для отмены используйте /cancel');
       return;
     }
 
@@ -361,7 +389,7 @@ async function handleCalcConversation(chatId, text) {
 • Ввести название на английском языке
 • Выбрать крупный город в этой стране
 
-Введите название города ещё раз:`);
+💡 Для отмены используйте /cancel`);
       return;
     }
 
@@ -373,11 +401,11 @@ async function handleCalcConversation(chatId, text) {
 
 Например: 2.5 или 3 или 0.5
 
-Введите вес:`);
+💡 Для отмены используйте /cancel`);
   } else if (state.step === 'weight') {
-    const weight = parseFloat(text.replace(',', '.'));
+    const weight = parseFloat(command.replace(',', '.'));
     if (isNaN(weight) || weight <= 0 || weight > 50) {
-      await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: 2.5 или 3');
+      await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: 2.5 или 3\n\n💡 Для отмены используйте /cancel');
       return;
     }
 
@@ -654,7 +682,7 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
     } else if (data?.error) {
       // Если API вернул ошибку
       console.error('Qwintry API error:', data.error);
-      await sendTg(chatId, `❌ Ошибка расчёта: ${data.error}\n\nПопробуйте другой склад или проверьте данные.`);
+      await sendTg(chatId, `❌ Ошибка расчёта: ${data.error}\n\nПопробуйте другой склад или проверьте данные.\n\n📱 Для нового расчёта используйте /calc`);
       
     } else {
       // Если нет тарифов, но и нет ошибки
@@ -670,7 +698,9 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
 Попробуйте:
 • Другой склад (например, Германия вместо США)
 • Меньший вес посылки
-• Проверить на официальном сайте: https://qwintry.com/ru/calculator/ru`
+• Проверить на официальном сайте: https://qwintry.com/ru/calculator/ru
+
+📱 Для нового расчёта используйте /calc`
       );
     }
   } catch (err) {
@@ -679,7 +709,9 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
       `❌ Произошла ошибка при расчёте доставки.
 
 Попробуйте позже или воспользуйтесь официальным калькулятором:
-https://qwintry.com/ru/calculator/ru`
+https://qwintry.com/ru/calculator/ru
+
+📱 Для нового расчёта используйте /calc`
     );
   }
 }
