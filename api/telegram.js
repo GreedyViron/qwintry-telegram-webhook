@@ -332,12 +332,13 @@ async function handleWeightInput(chatId, userId, weightText) {
 
   if (result.success) {
     const formattedResult = formatDeliveryResult(
-      result.data,
-      userState.warehouseName,
-      userState.countryName,
-      userState.cityName,
-      weight
-    );
+  result.data,
+  userState.warehouseName,
+  userState.countryName,
+  userState.cityName,
+  weight,
+  userState.warehouse  // ← добавь этот параметр!
+);
     await sendMessage(chatId, formattedResult);
   } else {
     await sendMessage(chatId, `❌ Не удалось рассчитать доставку для этого маршрута.\n\nВозможные причины:\n• Маршрут временно недоступен\n• Превышен лимит по весу\n• Техническая ошибка\n\nОшибка: ${result.error}`);
@@ -411,16 +412,23 @@ async function calculateDelivery(weight, countryId, cityId, warehouseCode) {
 }
 
 // Форматирование результата (улучшенная версия)
-function formatDeliveryResult(data, warehouseName, countryName, cityName, weight) {
+function formatDeliveryResult(data, warehouseName, countryName, cityName, weight, warehouseCode) {
   if (!data.costs || Object.keys(data.costs).length === 0) {
     return "❌ Нет доступных способов доставки для этого маршрута.";
+  }
+
+  let costs = Object.entries(data.costs);
+
+  // 🔑 фильтрация для EU/UK/ES — оставляем только ecopost
+  if (["DE", "UK", "ES"].includes(warehouseCode)) {
+    costs = costs.filter(([key]) => key === "ecopost");
   }
 
   let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n`;
   message += `⚖️ Вес: ${weight} кг\n\n`;
 
   // Сортируем тарифы по цене (от дешевого к дорогому)
-  const sortedTariffs = Object.entries(data.costs)
+  const sortedTariffs = costs
     .map(([key, option]) => ({
       key,
       option,
@@ -438,6 +446,11 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
     const days = option.days || '—';
 
     message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
+  }
+
+  // Добавляем информацию о составе цены для EU складов
+  if (["DE", "UK", "ES"].includes(warehouseCode) && sortedTariffs.length > 0) {
+    message += `\n💡 **Состав:** доставка + обработка $10 + комиссия ~3%`;
   }
 
   // Добавляем информацию о таможне
