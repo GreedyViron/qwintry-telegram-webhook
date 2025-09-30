@@ -43,13 +43,18 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
-    // Команда /start - показываем кнопки
+    // Команда /start - показываем кнопки + inline меню для веба
     if (userText === '/start') {
       const welcomeText = `Привет! Я бот службы доставки Banderolka/Qwintry 📦
 
-Задайте мне любой вопрос о доставке, или воспользуйтесь меню ниже:`;
+Задайте мне любой вопрос о доставке, или воспользуйтесь меню ниже:
+
+*Команды:*
+/calc - Калькулятор доставки
+/help - Справка
+/menu - Показать меню`;
       
-      await sendTgWithKeyboard(chatId, welcomeText, getMainKeyboard());
+      await sendTgWithBothKeyboards(chatId, welcomeText);
       return res.status(200).send('OK');
     }
 
@@ -57,7 +62,8 @@ export default async function handler(req, res) {
     if (userText === 'Калькулятор' || userText === '📦 Калькулятор' || userText === '/calc') {
       console.log(`Starting calc for user ${chatId}`);
       userStates[chatId] = { step: 'hub' };
-      await sendTg(chatId, `📦 *Калькулятор доставки*
+      
+      await sendTgWithRemoveKeyboard(chatId, `📦 *Калькулятор доставки*
 
 Введите код склада отправления:
 • *DE1* - Германия
@@ -80,9 +86,19 @@ export default async function handler(req, res) {
 • Возвраты и страховка
 • Правила и ограничения
 
+*Доступные команды:*
+/calc - Калькулятор доставки
+/menu - Показать главное меню
+
 Задайте свой вопрос или воспользуйтесь калькулятором для расчёта стоимости.`;
       
-      await sendTgWithKeyboard(chatId, helpText, getMainKeyboard());
+      await sendTgWithBothKeyboards(chatId, helpText);
+      return res.status(200).send('OK');
+    }
+
+    // Команда для показа меню
+    if (userText === '/menu' || userText.toLowerCase() === 'меню') {
+      await sendTgWithBothKeyboards(chatId, '📋 *Главное меню:*\n\nВыберите действие из меню ниже или используйте команды:');
       return res.status(200).send('OK');
     }
 
@@ -203,7 +219,7 @@ async function handleCalcConversation(chatId, text) {
   userStates[chatId] = state;
 }
 
-// Запрос в API калькулятора Qwintry
+// Запрос в API калькулятора Qwintry с улучшенным логированием
 async function doCalc(chatId, hub, country, weight) {
   const body = {
     hub: hub,
@@ -220,27 +236,57 @@ async function doCalc(chatId, hub, country, weight) {
     source: "calc"
   };
 
+  console.log('Qwintry request body:', JSON.stringify(body));
+
   try {
     const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "User-Agent": "TelegramBot/1.0"
+      },
       body: JSON.stringify(body)
     });
 
-    const data = await resp.json();
-    console.log('Qwintry calc response received');
+    console.log('Qwintry response status:', resp.status);
+    
+    if (!resp.ok) {
+      console.error('Qwintry API error:', resp.status, resp.statusText);
+      await sendTgWithKeyboard(chatId, 
+        '❌ Сервис расчёта временно недоступен.\n\nПопробуйте позже или обратитесь в поддержку.',
+        getMainKeyboard()
+      );
+      return;
+    }
 
+    const data = await resp.json();
+    console.log('Qwintry calc response:', JSON.stringify(data).slice(0, 2000));
+
+    // Проверяем разные возможные структуры ответа
+    let costs = null;
     if (data?.costs && Object.keys(data.costs).length > 0) {
+      costs = data.costs;
+    } else if (data?.result?.costs && Object.keys(data.result.costs).length > 0) {
+      costs = data.result.costs;
+    } else if (data?.data?.costs && Object.keys(data.data.costs).length > 0) {
+      costs = data.data.costs;
+    }
+
+    if (costs) {
       let reply = `📦 *Стоимость доставки*\n`;
       reply += `📍 Маршрут: *${hub} → ${country}*\n`;
       reply += `⚖️ Вес: *${weight} кг*\n\n`;
 
-      const methods = Object.entries(data.costs);
+      const methods = Object.entries(costs);
+      console.log('Found delivery methods:', methods.length);
+      
       methods.forEach(([method, details], index) => {
-        const label = details?.cost?.label || method;
-        const price = details?.cost?.costWithDiscount || details?.cost?.shippingCost || 0;
-        const total = details?.cost?.totalCostWithDiscount || details?.cost?.totalCost || 0;
-        const days = details?.days || '?';
+        console.log(`Method ${index + 1}:`, JSON.stringify(details).slice(0, 300));
+        
+        const label = details?.cost?.label || details?.label || method;
+        const price = details?.cost?.costWithDiscount || details?.cost?.shippingCost || details?.price || 0;
+        const total = details?.cost?.totalCostWithDiscount || details?.cost?.totalCost || details?.total || price;
+        const days = details?.days || details?.deliveryTime || '?';
 
         reply += `${index + 1}. *${label}*\n`;
         reply += `💰 Доставка: $${price}\n`;
@@ -249,16 +295,17 @@ async function doCalc(chatId, hub, country, weight) {
       });
 
       reply += `ℹ️ Цены указаны в долларах США\n`;
-      reply += `📱 Для нового расчёта используйте меню ниже`;
+      reply += `📱 Для нового расчёта используйте /calc`;
 
       await sendTgWithKeyboard(chatId, reply.trim(), getMainKeyboard());
     } else {
+      console.log('No costs found in response. Full response:', JSON.stringify(data));
       await sendTgWithKeyboard(chatId, 
         `❌ Не удалось рассчитать доставку для указанных параметров.
 
 *Возможные причины:*
-• Неподдерживаемый маршрут
-• Превышен лимит веса  
+• Неподдерживаемый маршрут *${hub} → ${country}*
+• Превышен лимит веса (${weight} кг)
 • Временные технические проблемы
 
 Попробуйте другие параметры или обратитесь в поддержку.`,
@@ -266,7 +313,7 @@ async function doCalc(chatId, hub, country, weight) {
       );
     }
   } catch (err) {
-    console.error('Calc error', err);
+    console.error('Calc error:', err);
     await sendTgWithKeyboard(chatId, 
       '❌ Произошла ошибка при расчёте доставки.\n\nПопробуйте позже или обратитесь в поддержку.',
       getMainKeyboard()
@@ -285,7 +332,8 @@ async function sendTg(chatId, text) {
       body: JSON.stringify({ 
         chat_id: chatId, 
         text, 
-        parse_mode: 'Markdown' 
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
       })
     });
     
@@ -300,6 +348,32 @@ async function sendTg(chatId, text) {
   }
 }
 
+// Отправка текста с удалением клавиатуры
+async function sendTgWithRemoveKeyboard(chatId, text) {
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  
+  try {
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown',
+      reply_markup: { remove_keyboard: true },
+      disable_web_page_preview: true
+    };
+    
+    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    return await resp.text();
+  } catch (error) {
+    console.error('sendTgWithRemoveKeyboard error:', error);
+    return null;
+  }
+}
+
 // Отправка текста с кнопками
 async function sendTgWithKeyboard(chatId, text, keyboard) {
   const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
@@ -309,22 +383,41 @@ async function sendTgWithKeyboard(chatId, text, keyboard) {
       chat_id: chatId,
       text: text,
       parse_mode: 'Markdown',
-      reply_markup: keyboard
+      reply_markup: keyboard,
+      disable_web_page_preview: true
     };
     
-    console.log('Sending keyboard:', JSON.stringify(keyboard));
+    console.log('Sending keyboard to chat', chatId, ':', JSON.stringify(keyboard));
     
     const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'User-Agent': 'TelegramBot/1.0'
+      },
       body: JSON.stringify(payload)
     });
     
     const result = await resp.text();
     if (!resp.ok) {
       console.error('Telegram sendMessage (keyboard) error', resp.status, result.slice(0, 300));
+      // Fallback без Markdown
+      const fallbackPayload = {
+        chat_id: chatId,
+        text: text.replace(/\*/g, ''),
+        reply_markup: keyboard,
+        disable_web_page_preview: true
+      };
+      
+      const fallbackResp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(fallbackPayload)
+      });
+      
+      return await fallbackResp.text();
     } else {
-      console.log('Keyboard sent successfully');
+      console.log('Keyboard sent successfully to chat', chatId);
     }
     return result;
   } catch (error) {
@@ -333,17 +426,59 @@ async function sendTgWithKeyboard(chatId, text, keyboard) {
   }
 }
 
-// Главное меню с кнопками
+// Отправка с обеими клавиатурами (Reply + Inline для веба)
+async function sendTgWithBothKeyboards(chatId, text) {
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  
+  try {
+    // Сначала отправляем с Reply клавиатурой (для мобильных)
+    await sendTgWithKeyboard(chatId, text, getMainKeyboard());
+    
+    // Затем отправляем Inline кнопки (для веба)
+    const inlinePayload = {
+      chat_id: chatId,
+      text: "🔽 *Или используйте кнопки ниже:*",
+      parse_mode: 'Markdown',
+      reply_markup: getInlineKeyboard(),
+      disable_web_page_preview: true
+    };
+    
+    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(inlinePayload)
+    });
+    
+    return await resp.text();
+  } catch (error) {
+    console.error('sendTgWithBothKeyboards error:', error);
+    return null;
+  }
+}
+
+// Главное меню с кнопками (Reply Keyboard для мобильных)
 function getMainKeyboard() {
   return {
     keyboard: [
       [
-        { text: "Калькулятор" },
-        { text: "Помощь" }
+        { text: "📦 Калькулятор" },
+        { text: "ℹ️ Помощь" }
       ]
     ],
     resize_keyboard: true,
     one_time_keyboard: false,
     persistent: true
+  };
+}
+
+// Inline клавиатура (для веба)
+function getInlineKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        { text: "📦 Калькулятор", callback_data: "calc" },
+        { text: "ℹ️ Помощь", callback_data: "help" }
+      ]
+    ]
   };
 }
