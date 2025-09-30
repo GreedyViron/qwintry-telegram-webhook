@@ -632,14 +632,17 @@ async function calculateDelivery(weight, countryId, cityId, hubCode) {
     console.log(`📊 Расчет: вес=${weight}кг, страна=${countryId}, город=${cityId}, hub=${hubCode}`);
 
     const payload = {
-      weight: weight.toString(),
-      country: countryId.toString(),
-      city: cityId.toString(),
-      weightMeasurement: "kg",
-      dimensions: "10x10x10",
-      dimensionsMeasurement: "cm",
-      hubCode: hubCode
-    };
+  weight: weight.toString(),
+  country: countryId.toString(),
+  city: cityId.toString(),
+  weightMeasurement: "kg",
+  dimensions: "10x10x10",
+  dimensionsMeasurement: "cm",
+  hubCode: hubCode,
+  insurance: "gg",         // 👈 базовая страховка
+  itemsCost: "1",          // 👈 стоимость посылки (чтобы прошло)
+  itemsCostInUSD: 1        // 👈 тоже обязательно
+};
 
     console.log("👉 Отправляем в API:", payload);
 
