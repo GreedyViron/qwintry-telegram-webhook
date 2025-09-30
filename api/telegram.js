@@ -4,9 +4,10 @@ const TOKEN = process.env.BOT_TOKEN;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
 export default async function handler(req, res) {
+  console.log(">>> BOT ONLINE ✅ Update received:", JSON.stringify(req.body, null, 2));
+  
   if (req.method === "POST") {
     const body = req.body;
-    console.log("Received update:", JSON.stringify(body, null, 2));
     
     if (body.message) {
       await handleMessage(body.message);
@@ -31,41 +32,11 @@ async function sendMessage(chatId, text, replyMarkup = null) {
       payload.reply_markup = replyMarkup;
     }
     
-    console.log("Sending message:", JSON.stringify(payload, null, 2));
-    
     const response = await axios.post(`${API}/sendMessage`, payload);
-    console.log("Message sent successfully:", response.data);
     return response.data;
   } catch (error) {
     console.error("Error sending message:", error.response?.data || error.message);
     throw error;
-  }
-}
-
-// === Отправка с двойной клавиатурой (Reply + Inline) ===
-async function sendMessageWithBothKeyboards(chatId, text, replyButtons = null, inlineButtons = null) {
-  try {
-    // Сначала отправляем сообщение с Reply клавиатурой
-    if (replyButtons) {
-      await sendMessage(chatId, text, {
-        keyboard: replyButtons,
-        resize_keyboard: true,
-        one_time_keyboard: false,
-      });
-    } else {
-      await sendMessage(chatId, text);
-    }
-    
-    // Затем отправляем Inline кнопки отдельным сообщением для веб-пользователей
-    if (inlineButtons) {
-      await sendMessage(chatId, "🔽 Или используйте кнопки ниже:", {
-        inline_keyboard: inlineButtons,
-      });
-    }
-  } catch (error) {
-    console.error("Error sending message with both keyboards:", error);
-    // Fallback: отправляем только текст
-    await sendMessage(chatId, text);
   }
 }
 
@@ -77,18 +48,16 @@ async function sendMainMenu(chatId) {
 • /calc - Калькулятор доставки
 • /help - Справка`;
 
-  const replyButtons = [
-    [{ text: "📦 Калькулятор" }, { text: "ℹ️ Помощь" }]
-  ];
-  
-  const inlineButtons = [
-    [
-      { text: "📦 Калькулятор", callback_data: "menu_calc" },
-      { text: "ℹ️ Помощь", callback_data: "menu_help" }
+  const inlineButtons = {
+    inline_keyboard: [
+      [
+        { text: "📦 Калькулятор", callback_data: "menu_calc" },
+        { text: "ℹ️ Помощь", callback_data: "menu_help" }
+      ]
     ]
-  ];
+  };
 
-  await sendMessageWithBothKeyboards(chatId, text, replyButtons, inlineButtons);
+  await sendMessage(chatId, text, inlineButtons);
 }
 
 // === Обработка сообщений ===
@@ -101,7 +70,10 @@ async function handleMessage(msg) {
   console.log(`Message from ${username} (${userId}): ${text}`);
 
   try {
+    // ВАЖНО: Сначала проверяем команды, потом уже калькулятор
     if (text === "/start") {
+      // Очищаем сессию при старте
+      delete sessions[chatId];
       await sendMessage(
         chatId,
         "Привет! Я бот службы доставки Banderolka/Qwintry 📦\n\n" +
@@ -112,16 +84,31 @@ async function handleMessage(msg) {
           "/menu - Показать меню"
       );
       await sendMainMenu(chatId);
-    } else if (text === "/menu") {
+      return;
+    }
+    
+    if (text === "/menu") {
+      delete sessions[chatId];
       await sendMainMenu(chatId);
-    } else if (text === "/help" || text === "ℹ️ Помощь") {
+      return;
+    }
+    
+    if (text === "/help" || text === "ℹ️ Помощь") {
+      delete sessions[chatId];
       await sendHelpMessage(chatId);
-    } else if (text === "/calc" || text === "📦 Калькулятор") {
+      return;
+    }
+    
+    if (text === "/calc" || text === "📦 Калькулятор") {
       await startCalc(chatId);
-    } else {
-      // Обработка пользовательского ввода для калькулятора
+      return;
+    }
+
+    // Только если это НЕ команда - обрабатываем как ввод для калькулятора
+    if (!text.startsWith("/")) {
       await processUserInput(chatId, text);
     }
+    
   } catch (error) {
     console.error("Error handling message:", error);
     await sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
@@ -211,7 +198,12 @@ async function startCalc(chatId) {
 
 async function processUserInput(chatId, text) {
   const session = sessions[chatId];
-  if (!session) return;
+  if (!session) {
+    // Если нет активной сессии калькулятора, показываем меню
+    await sendMessage(chatId, "Для начала работы выберите действие:");
+    await sendMainMenu(chatId);
+    return;
+  }
 
   if (session.step === "from") {
     if (text === "1") session.from = "US1";
@@ -295,7 +287,7 @@ async function doCalc(chatId, from, to, weight) {
       dimensionsMeasurement: "cm",
       weightMeasurement: "kg",
       itemsCost: "1",
-      city: to === "RU" ? "4050" : null, // Москва для России
+      city: to === "RU" ? "4050" : null,
       zip: to === "RU" ? "100000" : null,
     };
 
@@ -309,7 +301,7 @@ async function doCalc(chatId, from, to, weight) {
       timeout: 15000,
     });
 
-    console.log("API Response:", JSON.stringify(response.data, null, 2));
+    console.log("API Response received successfully");
 
     if (!response.data || !response.data.costs) {
       throw new Error("Invalid API response structure");
@@ -355,8 +347,8 @@ async function formatAndSendResults(chatId, data, from, to, weight) {
       // Очищаем описание от HTML тегов
       let description = methodData.description || "";
       description = description.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-      if (description.length > 100) {
-        description = description.substring(0, 100) + "...";
+      if (description.length > 80) {
+        description = description.substring(0, 80) + "...";
       }
 
       message += `${methodCount}. *${label}*\n`;
@@ -375,12 +367,6 @@ async function formatAndSendResults(chatId, data, from, to, weight) {
     if (data.country_info && data.country_info.customs_limit) {
       message += `---\n`;
       message += `ℹ️ *Таможня:* ${data.country_info.customs_limit}\n`;
-      
-      if (data.country_info.customs_limit_details) {
-        let details = data.country_info.customs_limit_details;
-        details = details.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-        message += `📋 ${details}\n`;
-      }
     }
 
     // Добавляем информацию о хранении
@@ -395,19 +381,10 @@ async function formatAndSendResults(chatId, data, from, to, weight) {
 
     // Добавляем количество пунктов выдачи
     if (data.pickup_points) {
-      message += `📍 Доступно пунктов выдачи: ${data.pickup_points}\n`;
+      message += `📍 Доступно пунктов выдачи: ${data.pickup_points}`;
     }
 
-    // Разбиваем длинное сообщение на части, если необходимо
-    if (message.length > 4000) {
-      const parts = splitMessage(message, 4000);
-      for (const part of parts) {
-        await sendMessage(chatId, part);
-        await new Promise(resolve => setTimeout(resolve, 100)); // Небольшая задержка между сообщениями
-      }
-    } else {
-      await sendMessage(chatId, message);
-    }
+    await sendMessage(chatId, message);
 
     // Предлагаем новый расчёт
     const newCalcButton = {
@@ -422,50 +399,4 @@ async function formatAndSendResults(chatId, data, from, to, weight) {
     console.error("Error formatting results:", error);
     await sendMessage(chatId, "⚠️ Ошибка при обработке результатов.");
   }
-}
-
-// === Разбивка длинных сообщений ===
-function splitMessage(text, maxLength) {
-  const parts = [];
-  let currentPart = "";
-  const lines = text.split("\n");
-
-  for (const line of lines) {
-    if ((currentPart + line + "\n").length > maxLength) {
-      if (currentPart) {
-        parts.push(currentPart.trim());
-        currentPart = "";
-      }
-      
-      if (line.length > maxLength) {
-        // Если строка слишком длинная, разбиваем её
-        const words = line.split(" ");
-        let currentLine = "";
-        for (const word of words) {
-          if ((currentLine + word + " ").length > maxLength) {
-            if (currentLine) {
-              parts.push(currentLine.trim());
-              currentLine = "";
-            }
-            currentLine = word + " ";
-          } else {
-            currentLine += word + " ";
-          }
-        }
-        if (currentLine) {
-          currentPart = currentLine;
-        }
-      } else {
-        currentPart = line + "\n";
-      }
-    } else {
-      currentPart += line + "\n";
-    }
-  }
-
-  if (currentPart.trim()) {
-    parts.push(currentPart.trim());
-  }
-
-  return parts;
 }
