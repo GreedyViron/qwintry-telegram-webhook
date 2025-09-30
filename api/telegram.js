@@ -4,7 +4,6 @@ const TOKEN = process.env.BOT_TOKEN;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
 export default async function handler(req, res) {
-  console.log("BOT ONLINE ✅", req.method, req.url);
   if (req.method === "POST") {
     const body = req.body;
     console.log("Received update:", JSON.stringify(body, null, 2));
@@ -89,9 +88,7 @@ async function sendMainMenu(chatId) {
     ]
   ];
 
-  await sendMessage(chatId, text, {
-    inline_keyboard: inlineButtons
-  });
+  await sendMessageWithBothKeyboards(chatId, text, replyButtons, inlineButtons);
 }
 
 // === Обработка сообщений ===
@@ -150,8 +147,6 @@ async function handleCallback(query) {
       await startCalc(chatId);
     } else if (data === "menu_help") {
       await sendHelpMessage(chatId);
-    } else if (data.startsWith("calc_")) {
-      await handleCalcCallback(chatId, data);
     }
   } catch (error) {
     console.error("Error handling callback:", error);
@@ -211,74 +206,7 @@ async function startCalc(chatId) {
 
 Введите номер (1, 2 или 3):`;
 
-  const inlineButtons = [
-    [
-      { text: "1️⃣ США", callback_data: "calc_from_1" },
-      { text: "2️⃣ Германия", callback_data: "calc_from_2" },
-      { text: "3️⃣ Великобритания", callback_data: "calc_from_3" }
-    ]
-  ];
-
-  await sendMessage(chatId, text, {
-    inline_keyboard: inlineButtons
-  });
-}
-
-async function handleCalcCallback(chatId, data) {
-  const session = sessions[chatId] || {};
-  
-  if (data.startsWith("calc_from_")) {
-    const choice = data.split("_")[2];
-    if (choice === "1") session.from = "US1";
-    else if (choice === "2") session.from = "DE1";
-    else if (choice === "3") session.from = "UK1";
-    
-    session.step = "to";
-    sessions[chatId] = session;
-    
-    const text = `✅ Склад: ${session.from}
-
-🌍 Выберите страну назначения:
-1️⃣ Россия (RU)
-2️⃣ Казахстан (KZ)
-3️⃣ Беларусь (BY)
-4️⃣ Украина (UA)
-
-Введите номер (1, 2, 3 или 4):`;
-
-    const inlineButtons = [
-      [
-        { text: "1️⃣ Россия", callback_data: "calc_to_1" },
-        { text: "2️⃣ Казахстан", callback_data: "calc_to_2" }
-      ],
-      [
-        { text: "3️⃣ Беларусь", callback_data: "calc_to_3" },
-        { text: "4️⃣ Украина", callback_data: "calc_to_4" }
-      ]
-    ];
-
-    await sendMessage(chatId, text, {
-      inline_keyboard: inlineButtons
-    });
-  } else if (data.startsWith("calc_to_")) {
-    const choice = data.split("_")[2];
-    if (choice === "1") session.to = "RU";
-    else if (choice === "2") session.to = "KZ";
-    else if (choice === "3") session.to = "BY";
-    else if (choice === "4") session.to = "UA";
-    
-    session.step = "weight";
-    sessions[chatId] = session;
-    
-    await sendMessage(
-      chatId,
-      `✅ Маршрут: ${session.from} → ${session.to}
-
-⚖️ Введите вес посылки в килограммах:
-
-Например: 2.5 или 3`
-    );
-  }
+  await sendMessage(chatId, text);
 }
 
 async function processUserInput(chatId, text) {
@@ -294,17 +222,6 @@ async function processUserInput(chatId, text) {
     }
 
     session.step = "to";
-    const inlineButtons = [
-      [
-        { text: "1️⃣ Россия", callback_data: "calc_to_1" },
-        { text: "2️⃣ Казахстан", callback_data: "calc_to_2" }
-      ],
-      [
-        { text: "3️⃣ Беларусь", callback_data: "calc_to_3" },
-        { text: "4️⃣ Украина", callback_data: "calc_to_4" }
-      ]
-    ];
-
     return sendMessage(
       chatId,
       `✅ Склад: ${session.from}
@@ -315,8 +232,7 @@ async function processUserInput(chatId, text) {
 3️⃣ Беларусь (BY)
 4️⃣ Украина (UA)
 
-Введите номер (1, 2, 3 или 4):`,
-      { inline_keyboard: inlineButtons }
+Введите номер (1, 2, 3 или 4):`
     );
   }
 
@@ -496,8 +412,7 @@ async function formatAndSendResults(chatId, data, from, to, weight) {
     // Предлагаем новый расчёт
     const newCalcButton = {
       inline_keyboard: [
-        [{ text: "🔄 Новый расчёт", callback_data: "menu_calc" }],
-        [{ text: "📋 Главное меню", callback_data: "main_menu" }]
+        [{ text: "🔄 Новый расчёт", callback_data: "menu_calc" }]
       ]
     };
 
@@ -554,27 +469,3 @@ function splitMessage(text, maxLength) {
 
   return parts;
 }
-
-// === Обработка дополнительных callback'ов ===
-async function handleAdditionalCallbacks(chatId, data) {
-  if (data === "main_menu") {
-    await sendMainMenu(chatId);
-  }
-}
-
-// Добавляем обработку дополнительных callback'ов в основную функцию
-const originalHandleCallback = handleCallback;
-handleCallback = async function(query) {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-
-  if (data === "main_menu") {
-    await axios.post(`${API}/answerCallbackQuery`, {
-      callback_query_id: query.id,
-    });
-    await sendMainMenu(chatId);
-    return;
-  }
-
-  return originalHandleCallback(query);
-};
