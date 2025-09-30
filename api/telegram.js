@@ -40,23 +40,35 @@ export default async function handler(req, res) {
       return res.status(200).send('OK');
     }
 
-    // Команды
+    // Команда /start - показываем кнопки
     if (userText === '/start') {
       await sendTgWithKeyboard(chatId,
-        'Привет! Я бот Banderolka/Qwintry.\n\nЗадай вопрос — я постараюсь помочь.\nДоступные кнопки: «Калькулятор», «Помощь».',
+        'Привет! Я бот Banderolka/Qwintry.\n\nЗадай вопрос — я постараюсь помочь, или воспользуйся кнопками ниже 👇',
         mainKeyboard()
       );
       return res.status(200).send('OK');
     }
 
-    if (userText === '/help' || userText === 'Помощь') {
-      await sendTg(chatId, 'Я помогу с ответами по Banderolka/Qwintry: тарифы, сроки, отслеживание, возвраты.\nСкоро добавим больше опций.\n\nНапишите свой вопрос или воспользуйтесь калькулятором.');
+    // Кнопка "Калькулятор" - запускаем пошаговый расчёт
+    if (userText === 'Калькулятор') {
+      userStates[chatId] = { step: 'hub' };
+      await sendTg(chatId, '📦 Калькулятор доставки\n\nВведите код склада отправления:\n• DE1 (Германия)\n• US1 (США)\n• UK1 (Великобритания)\n\nНапример: DE1');
       return res.status(200).send('OK');
     }
 
-    if (userText === 'Калькулятор') {
+    // Кнопка "Помощь"
+    if (userText === 'Помощь' || userText === '/help') {
+      await sendTgWithKeyboard(chatId, 
+        'ℹ️ Я помогу с вопросами по Banderolka/Qwintry:\n\n• Тарифы и стоимость доставки\n• Сроки доставки\n• Отслеживание посылок\n• Возвраты и страховка\n• Правила доставки\n\nЗадайте свой вопрос или воспользуйтесь калькулятором для расчёта стоимости.',
+        mainKeyboard()
+      );
+      return res.status(200).send('OK');
+    }
+
+    // Команда /calc - тоже запускаем калькулятор
+    if (userText === '/calc') {
       userStates[chatId] = { step: 'hub' };
-      await sendTg(chatId, 'Введите код склада (например, DE1, US1):');
+      await sendTg(chatId, '📦 Калькулятор доставки\n\nВведите код склада отправления:\n• DE1 (Германия)\n• US1 (США)\n• UK1 (Великобритания)\n\nНапример: DE1');
       return res.status(200).send('OK');
     }
 
@@ -68,6 +80,8 @@ export default async function handler(req, res) {
       userId: String(chatId)
     };
 
+    console.log('Calling Abacus URL:', url);
+
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -75,10 +89,14 @@ export default async function handler(req, res) {
     });
 
     const raw = await resp.text();
+    console.log('Abacus status:', resp.status, raw.slice(0, 400));
+
     let botReply = 'Извините, не удалось получить ответ.';
     if (resp.ok) {
       try {
         const data = JSON.parse(raw || '{}');
+
+        // Попробуем извлечь текст из разных возможных полей
         botReply =
           data?.responseText ||
           data?.text ||
@@ -88,11 +106,13 @@ export default async function handler(req, res) {
           data?.result?.text ||
           botReply;
 
+        // Доп. случай: формат {"success": true, "result": {"messages": [{is_user: true, text: "..."}, {is_user: false, text: "..."}]}}
         if (!data?.responseText && data?.result?.messages?.length) {
           const lastAssistant = [...data.result.messages].reverse().find(m => m && m.is_user === false && typeof m.text === 'string');
           if (lastAssistant?.text) botReply = lastAssistant.text;
         }
 
+        // Небольшая защита на случай пустой строки
         if (!botReply || typeof botReply !== 'string' || !botReply.trim()) {
           botReply = 'Извините, не удалось получить ответ.';
         }
@@ -103,7 +123,7 @@ export default async function handler(req, res) {
       console.error('Abacus non-OK', resp.status, raw.slice(0, 500));
     }
 
-    await sendTg(chatId, botReply);
+    await sendTgWithKeyboard(chatId, botReply, mainKeyboard());
     return res.status(200).send('OK');
   } catch (e) {
     console.error('Webhook error:', e);
@@ -118,16 +138,33 @@ async function handleCalcConversation(chatId, text) {
   const state = userStates[chatId] || {};
 
   if (state.step === 'hub') {
-    state.hub = text.toUpperCase();
+    const hub = text.toUpperCase().trim();
+    if (!['DE1', 'US1', 'UK1'].includes(hub)) {
+      await sendTg(chatId, '❌ Неверный код склада. Используйте:\n• DE1 (Германия)\n• US1 (США)\n• UK1 (Великобритания)\n\nПопробуйте ещё раз:');
+      return;
+    }
+    state.hub = hub;
     state.step = 'country';
-    await sendTg(chatId, 'Введите код страны назначения (например, RU):');
+    await sendTg(chatId, '🌍 Введите код страны назначения:\n• RU (Россия)\n• KZ (Казахстан)\n• BY (Беларусь)\n• UA (Украина)\n\nНапример: RU');
   } else if (state.step === 'country') {
-    state.country = text.toUpperCase();
+    const country = text.toUpperCase().trim();
+    if (country.length !== 2) {
+      await sendTg(chatId, '❌ Введите двухбуквенный код страны (например: RU, KZ, BY, UA)');
+      return;
+    }
+    state.country = country;
     state.step = 'weight';
-    await sendTg(chatId, 'Введите вес посылки (в кг):');
+    await sendTg(chatId, '⚖️ Введите вес посылки в килограммах:\n\nНапример: 2.5 или 3');
   } else if (state.step === 'weight') {
-    state.weight = text;
+    const weight = parseFloat(text.replace(',', '.'));
+    if (isNaN(weight) || weight <= 0 || weight > 50) {
+      await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: 2.5 или 3');
+      return;
+    }
+    state.weight = weight.toString();
     state.step = null; // сброс
+    
+    await sendTg(chatId, '⏳ Рассчитываю стоимость доставки...');
     await doCalc(chatId, state.hub, state.country, state.weight);
     delete userStates[chatId];
   }
@@ -160,25 +197,42 @@ async function doCalc(chatId, hub, country, weight) {
     });
 
     const data = await resp.json();
-    if (data?.costs) {
-      let reply = `📦 Стоимость доставки (вес: ${weight} кг, из склада ${hub} в ${country}):\n\n`;
+    console.log('Qwintry calc response:', JSON.stringify(data).slice(0, 500));
 
-      for (const [method, details] of Object.entries(data.costs)) {
+    if (data?.costs && Object.keys(data.costs).length > 0) {
+      let reply = `📦 Стоимость доставки\n`;
+      reply += `📍 Маршрут: ${hub} → ${country}\n`;
+      reply += `⚖️ Вес: ${weight} кг\n\n`;
+
+      const methods = Object.entries(data.costs);
+      methods.forEach(([method, details], index) => {
         const label = details?.cost?.label || method;
-        const price = details?.cost?.costWithDiscount || details?.cost?.shippingCost;
-        const total = details?.cost?.totalCostWithDiscount || details?.cost?.totalCost;
+        const price = details?.cost?.costWithDiscount || details?.cost?.shippingCost || 0;
+        const total = details?.cost?.totalCostWithDiscount || details?.cost?.totalCost || 0;
         const days = details?.days || '?';
 
-        reply += `🔹 ${label}\nЦена: ${price} USD\nИтого: ${total} USD\nСрок: ${days}\n\n`;
-      }
+        reply += `${index + 1}. ${label}\n`;
+        reply += `💰 Доставка: $${price}\n`;
+        reply += `💳 Итого: $${total}\n`;
+        reply += `⏰ Срок: ${days}\n\n`;
+      });
 
-      await sendTg(chatId, reply.trim());
+      reply += `ℹ️ Цены указаны в долларах США\n`;
+      reply += `📱 Для нового расчёта нажмите "Калькулятор"`;
+
+      await sendTgWithKeyboard(chatId, reply.trim(), mainKeyboard());
     } else {
-      await sendTg(chatId, 'Извините, не удалось рассчитать доставку 😔');
+      await sendTgWithKeyboard(chatId, 
+        '❌ Не удалось рассчитать доставку для указанных параметров.\n\nВозможные причины:\n• Неподдерживаемый маршрут\n• Превышен лимит веса\n• Временные технические проблемы\n\nПопробуйте другие параметры или обратитесь в поддержку.',
+        mainKeyboard()
+      );
     }
   } catch (err) {
     console.error('Calc error', err);
-    await sendTg(chatId, 'Ошибка при расчёте доставки.');
+    await sendTgWithKeyboard(chatId, 
+      '❌ Произошла ошибка при расчёте доставки.\n\nПопробуйте позже или обратитесь в поддержку.',
+      mainKeyboard()
+    );
   }
 }
 
@@ -188,7 +242,11 @@ async function sendTg(chatId, text) {
   const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+    body: JSON.stringify({ 
+      chat_id: chatId, 
+      text, 
+      parse_mode: 'Markdown' 
+    })
   });
   const raw = await resp.text();
   if (!resp.ok) {
@@ -217,11 +275,11 @@ async function sendTgWithKeyboard(chatId, text, keyboard) {
   return raw;
 }
 
-// Главное меню
+// Главное меню с кнопками
 function mainKeyboard() {
   return {
     keyboard: [
-      [{ text: "Калькулятор" }, { text: "Помощь" }]
+      [{ text: "📦 Калькулятор" }, { text: "ℹ️ Помощь" }]
     ],
     resize_keyboard: true,
     one_time_keyboard: false
