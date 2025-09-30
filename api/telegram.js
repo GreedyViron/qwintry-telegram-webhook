@@ -1,5 +1,6 @@
 // Telegram Bot для сервиса Qwintry (Бандеролька)
 // Полнофункциональный бот с меню, калькулятором и AI-консультантом
+// Финальная версия с исправлениями и всеми 5 складами
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ABACUS_API_KEY = process.env.ABACUS_API_KEY;
@@ -16,11 +17,13 @@ const STATES = {
   CALC_WEIGHT: 'calc_weight'
 };
 
-// Склады
+// Все 5 складов Qwintry
 const WAREHOUSES = {
   'US1': { code: 'US1', name: 'США', emoji: '🇺🇸' },
   'DE1': { code: 'DE1', name: 'Германия', emoji: '🇩🇪' },
-  'CN1': { code: 'CN1', name: 'Китай', emoji: '🇨🇳' }
+  'UK1': { code: 'UK1', name: 'Великобритания', emoji: '🇬🇧' },
+  'CN1': { code: 'CN1', name: 'Китай', emoji: '🇨🇳' },
+  'ES1': { code: 'ES1', name: 'Испания', emoji: '🇪🇸' }
 };
 
 // Кэш для стран и городов
@@ -44,26 +47,49 @@ const COUNTRIES_DICT = {
   'america': { id: 92, name: 'США' },
   '92': { id: 92, name: 'США' },
   
-  // Другие популярные страны
+  // Украина
   'украина': { id: 93, name: 'Украина' },
   'ukraine': { id: 93, name: 'Украина' },
   'ua': { id: 93, name: 'Украина' },
+  '93': { id: 93, name: 'Украина' },
   
+  // Беларусь
   'беларусь': { id: 7, name: 'Беларусь' },
   'belarus': { id: 7, name: 'Беларусь' },
   'by': { id: 7, name: 'Беларусь' },
+  '7': { id: 7, name: 'Беларусь' },
   
+  // Казахстан
   'казахстан': { id: 36, name: 'Казахстан' },
   'kazakhstan': { id: 36, name: 'Казахстан' },
   'kz': { id: 36, name: 'Казахстан' },
+  '36': { id: 36, name: 'Казахстан' },
   
+  // Германия
   'германия': { id: 22, name: 'Германия' },
   'germany': { id: 22, name: 'Германия' },
   'de': { id: 22, name: 'Германия' },
+  '22': { id: 22, name: 'Германия' },
   
+  // Китай
   'китай': { id: 14, name: 'Китай' },
   'china': { id: 14, name: 'Китай' },
-  'cn': { id: 14, name: 'Китай' }
+  'cn': { id: 14, name: 'Китай' },
+  '14': { id: 14, name: 'Китай' },
+  
+  // Великобритания
+  'великобритания': { id: 91, name: 'Великобритания' },
+  'britain': { id: 91, name: 'Великобритания' },
+  'uk': { id: 91, name: 'Великобритания' },
+  'англия': { id: 91, name: 'Великобритания' },
+  'england': { id: 91, name: 'Великобритания' },
+  '91': { id: 91, name: 'Великобритания' },
+  
+  // Испания
+  'испания': { id: 79, name: 'Испания' },
+  'spain': { id: 79, name: 'Испания' },
+  'es': { id: 79, name: 'Испания' },
+  '79': { id: 79, name: 'Испания' }
 };
 
 // Словарь популярных городов России
@@ -85,7 +111,9 @@ const CITIES_DICT = {
   'красноярск': { id: 4044, name: 'Красноярск' },
   'воронеж': { id: 4013, name: 'Воронеж' },
   'пермь': { id: 4070, name: 'Пермь' },
-  'волгоград': { id: 4012, name: 'Волгоград' }
+  'волгоград': { id: 4012, name: 'Волгоград' },
+  'краснодар': { id: 4043, name: 'Краснодар' },
+  'тюмень': { id: 4085, name: 'Тюмень' }
 };
 
 // Эмодзи для тарифов
@@ -233,7 +261,11 @@ async function startCalculator(chatId, userId) {
         { text: '🇩🇪 Германия (DE1)', callback_data: 'warehouse_DE1' }
       ],
       [
+        { text: '🇬🇧 Великобритания (UK1)', callback_data: 'warehouse_UK1' },
         { text: '🇨🇳 Китай (CN1)', callback_data: 'warehouse_CN1' }
+      ],
+      [
+        { text: '🇪🇸 Испания (ES1)', callback_data: 'warehouse_ES1' }
       ],
       [
         { text: '🔙 Назад в меню', callback_data: 'back_to_menu' }
@@ -261,7 +293,7 @@ async function handleWarehouseSelection(chatId, userId, warehouse) {
   await sendMessage(chatId, 
     `✅ Выбран склад: ${warehouseInfo.emoji} ${warehouseInfo.name}\n\n` +
     "Шаг 2/4: Введите страну назначения:\n" +
-    "📝 Например: Россия, США, Германия, Украина"
+    "📝 Например: Россия, США, Германия, Украина, Беларусь, Казахстан"
   );
 }
 
@@ -301,6 +333,9 @@ async function handleCountryInput(chatId, userId, text) {
       "• Украина (украина, ukraine, ua)\n" +
       "• Беларусь (беларусь, belarus, by)\n" +
       "• Казахстан (казахстан, kazakhstan, kz)\n" +
+      "• Германия (германия, germany, de)\n" +
+      "• Великобритания (великобритания, uk, britain)\n" +
+      "• Испания (испания, spain, es)\n" +
       "• И другие...\n\n" +
       "💡 Попробуйте написать по-другому"
     );
@@ -312,7 +347,7 @@ async function handleCountryInput(chatId, userId, text) {
   await sendMessage(chatId, 
     `✅ Выбрана страна: ${country.name}\n\n` +
     "Шаг 3/4: Введите город назначения:\n" +
-    "📝 Например: Москва, Санкт-Петербург, Екатеринбург"
+    "📝 Например: Москва, Санкт-Петербург, Екатеринбург, Новосибирск"
   );
 }
 
@@ -324,12 +359,23 @@ async function handleCityInput(chatId, userId, text) {
   const city = await findCity(text, country.id);
   
   if (!city) {
+    let cityExamples = "🏙️ **Популярные города:**\n";
+    
+    if (country.id === 71) { // Россия
+      cityExamples += "• Москва, Санкт-Петербург, Екатеринбург\n" +
+                     "• Новосибирск, Казань, Челябинск\n" +
+                     "• Омск, Самара, Ростов-на-Дону";
+    } else if (country.id === 92) { // США
+      cityExamples += "• New York, Los Angeles, Chicago\n" +
+                     "• Houston, Phoenix, Philadelphia";
+    } else {
+      cityExamples += "• Проверьте правильность написания\n" +
+                     "• Попробуйте написать на английском";
+    }
+    
     await sendMessage(chatId, 
       `❌ Город "${text}" не найден в стране ${country.name}!\n\n` +
-      "🏙️ **Популярные города России:**\n" +
-      "• Москва, Санкт-Петербург, Екатеринбург\n" +
-      "• Новосибирск, Казань, Челябинск\n" +
-      "• Омск, Самара, Ростов-на-Дону\n\n" +
+      cityExamples + "\n\n" +
       "💡 Проверьте правильность написания"
     );
     return;
@@ -346,13 +392,13 @@ async function handleCityInput(chatId, userId, text) {
 
 // Обработка ввода веса
 async function handleWeightInput(chatId, userId, text) {
-  const weight = parseFloat(text);
+  const weight = parseFloat(text.replace(',', '.'));
   
   if (isNaN(weight) || weight <= 0 || weight > 50) {
     await sendMessage(chatId, 
       "❌ **Неверный вес!**\n\n" +
       "📏 Укажите вес от 0.1 до 50 кг\n" +
-      "📋 Пример: 2.5"
+      "📋 Примеры: 2.5, 1,8, 10"
     );
     return;
   }
@@ -366,11 +412,13 @@ async function handleWeightInput(chatId, userId, text) {
   // Отправка сообщения о начале расчета
   await sendMessage(chatId, "⏳ Рассчитываю стоимость доставки...");
 
-  // Определяем правильный hub для России
+  // Определяем правильный hub для России (всегда DE1)
   let hubCode = warehouse;
   if (country.id === 71) { // Россия
     hubCode = 'DE1'; // Для России всегда используем DE1
   }
+
+  console.log(`🎯 Расчет: склад=${warehouse}, hub=${hubCode}, страна=${country.name} (${country.id}), город=${city.name} (${city.id}), вес=${weight}кг`);
 
   // Расчет доставки
   const result = await calculateDelivery(weight, country.id, city.id, hubCode);
@@ -396,7 +444,7 @@ async function handleWeightInput(chatId, userId, text) {
   }
 
   // Показываем меню после расчета
-  setTimeout(() => showMainMenu(chatId, userId), 2000);
+  setTimeout(() => showMainMenu(chatId, userId), 3000);
 }
 
 // AI-консультант
@@ -429,7 +477,8 @@ async function showDiscounts(chatId) {
     "🎉 **Новым клиентам** — скидка 10% на первую посылку\n" +
     "📦 **При весе от 5 кг** — скидка 5%\n" +
     "🚀 **Qwintry Smart** — бесплатная упаковка\n" +
-    "💎 **VIP-клиентам** — персональные скидки до 15%\n\n" +
+    "💎 **VIP-клиентам** — персональные скидки до 15%\n" +
+    "⚡ **Qwintry Flash** — экономия на консолидации\n\n" +
     "🔗 Подробности на сайте: https://qwintry.com/ru/discounts",
     keyboard
   );
@@ -456,6 +505,8 @@ async function showFAQ(chatId) {
     "Для России: до €200 без пошлин\n\n" +
     "❓ **Как отследить посылку?**\n" +
     "В личном кабинете на qwintry.com\n\n" +
+    "❓ **Какие склады доступны?**\n" +
+    "США, Германия, Великобритания, Китай, Испания\n\n" +
     "🔗 Больше ответов: https://qwintry.com/ru/faq",
     keyboard
   );
@@ -474,11 +525,18 @@ async function handleHelpCommand(chatId) {
     "• Сколько стоит доставка в Германию?\n" +
     "• Какие документы нужны для таможни?\n" +
     "• Как упаковать хрупкие товары?\n" +
-    "• Что такое консолидация?"
+    "• Что такое консолидация?\n" +
+    "• Какой склад лучше выбрать?\n\n" +
+    "🚀 **Калькулятор работает пошагово:**\n" +
+    "1. Выбор склада (5 вариантов)\n" +
+    "2. Страна назначения\n" +
+    "3. Город назначения\n" +
+    "4. Вес посылки\n" +
+    "5. Получение всех тарифов с ценами"
   );
 }
 
-// Поиск страны (без изменений)
+// Поиск страны
 async function findCountry(query) {
   const normalizedQuery = query.toLowerCase().trim();
   
@@ -520,7 +578,7 @@ async function findCountry(query) {
   return null;
 }
 
-// Поиск города (без изменений)
+// Поиск города
 async function findCity(query, countryId) {
   const normalizedQuery = query.toLowerCase().trim();
   
@@ -568,8 +626,8 @@ async function findCity(query, countryId) {
   return null;
 }
 
-// Расчет стоимости доставки (обновлено для поддержки hubCode)
-async function calculateDelivery(weight, countryId, cityId, hubCode = 'US1') {
+// Расчет стоимости доставки (исправленная версия)
+async function calculateDelivery(weight, countryId, cityId, hubCode) {
   try {
     console.log(`📊 Расчет доставки: вес=${weight}кг, страна=${countryId}, город=${cityId}, hub=${hubCode}`);
 
@@ -578,9 +636,9 @@ async function calculateDelivery(weight, countryId, cityId, hubCode = 'US1') {
       country: countryId.toString(),
       city: cityId.toString(),
       weightMeasurement: 'kg',
-      dimensions: '1x1x1',
+      dimensions: '10x10x10', // Исправлено: используем стандартные размеры
       dimensionsMeasurement: 'cm',
-      hubCode: hubCode
+      hubCode: hubCode // Обязательно передаем hubCode
     });
 
     const response = await fetch('https://q3-api.qwintry.com/ru/calculate', {
@@ -597,7 +655,7 @@ async function calculateDelivery(weight, countryId, cityId, hubCode = 'US1') {
     }
 
     const data = await response.json();
-    console.log('📦 Ответ API получен:', JSON.stringify(data, null, 2));
+    console.log('📦 Ответ API получен успешно');
 
     if (!data.costs || Object.keys(data.costs).length === 0) {
       return {
@@ -617,7 +675,7 @@ async function calculateDelivery(weight, countryId, cityId, hubCode = 'US1') {
   }
 }
 
-// Форматирование результата (обновлено)
+// Форматирование результата (улучшенная версия)
 function formatDeliveryResult(data, warehouseName, countryName, cityName, weight) {
   if (!data.costs || Object.keys(data.costs).length === 0) {
     return "❌ Нет доступных способов доставки для этого маршрута.";
@@ -626,7 +684,7 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
   let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n`;
   message += `⚖️ Вес: ${weight} кг\n\n`;
 
-  // Сортируем тарифы по цене
+  // Сортируем тарифы по цене (от дешевого к дорогому)
   const sortedTariffs = Object.entries(data.costs)
     .map(([key, option]) => ({
       key,
@@ -639,14 +697,7 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
     if (!option?.cost) continue;
 
     const emoji = TARIFF_EMOJIS[key] || '📦';
-    let label = option.cost.label || key;
-    
-    // Переводим названия тарифов
-    if (key === 'qwintry_flash') label = 'Qwintry Flash';
-    if (key === 'ecopost') label = 'Qwintry Economy';
-    if (key === 'qwair') label = 'Qwintry Air';
-    if (key === 'qwintry_smart') label = 'Qwintry Smart';
-
+    const label = option.cost.label || key;
     const price = option.cost.totalCostWithDiscount || option.cost.totalCost;
     const currency = option.cost.currency || '$';
     const days = option.days || '—';
@@ -654,7 +705,7 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
     message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
   }
 
-  // Добавляем информацию о таможне для России
+  // Добавляем информацию о таможне
   if (data.country_info?.customs_limit) {
     message += `\n💡 **Таможня:** ${data.country_info.customs_limit}`;
   }
@@ -664,7 +715,7 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
   return message;
 }
 
-// Отправка сообщения в Telegram (обновлено для поддержки клавиатуры)
+// Отправка сообщения в Telegram
 async function sendMessage(chatId, text, keyboard = null) {
   try {
     const payload = {
@@ -729,7 +780,7 @@ async function getAbacusResponse(message) {
         messages: [
           {
             role: 'system',
-            content: 'Ты помощник по доставке товаров через сервис Qwintry (Бандеролька). Отвечай кратко и по делу на русском языке. Помогай с вопросами о доставке, тарифах, сроках, таможне, упаковке товаров.'
+            content: 'Ты помощник по доставке товаров через сервис Qwintry (Бандеролька). Отвечай кратко и по делу на русском языке. Помогай с вопросами о доставке, тарифах, сроках, таможне, упаковке товаров. У Qwintry есть 5 складов: США, Германия, Великобритания, Китай, Испания. Основные тарифы: Flash (экономичный), Economy (для тяжелых посылок), Air (стандартный), Smart (для сложных товаров).'
           },
           {
             role: 'user',
