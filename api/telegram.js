@@ -435,12 +435,10 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
 
     let price;
     if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
-      // ⚡ Пересчёт по формуле сайта (без страховки)
-      const shipping = option.cost.shippingCost || 0;
-      const packing = option.cost.packingCost || 7;
-      const fee = option.cost.gatewayFee || 0;
-      price = +(shipping + packing + fee).toFixed(2);
-    } else {
+  const shipping = option.cost.shippingCost || 0;
+  const fee = option.cost.gatewayFee || 0;
+  price = +(shipping + 7 + fee).toFixed(2);  // фикс $7 упаковки
+} else {
       // Для US / CN оставляем как есть
       price = option.cost.totalCostWithDiscount || option.cost.totalCost;
     }
