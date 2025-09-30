@@ -1,737 +1,476 @@
-// api/telegram.js
-// Telegram webhook → Abacus.AI + калькулятор доставки Qwintry
+// Telegram Bot для расчета доставки через Qwintry
+// Финальная версия с полной поддержкой всех тарифов
 
-const APPS_GET_CHAT_URL = 'https://apps.abacus.ai/api/getChatResponse';
-const DEPLOYMENT_ID = '1413dbc596';
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const ABACUS_API_KEY = process.env.ABACUS_API_KEY;
 
-// для хранения состояний диалога калькулятора
-const userStates = {};
+// Кэш для стран и городов
+let countriesCache = null;
+let citiesCache = {};
 
-// Склады Qwintry
-const WAREHOUSES = {
-  '1': { code: 'US1', name: 'США' },
-  '2': { code: 'DE1', name: 'Германия' },
-  '3': { code: 'UK1', name: 'Великобритания' },
-  '4': { code: 'CN1', name: 'Китай' },
-  '5': { code: 'ES1', name: 'Испания' }
-};
-
-// 🔥 ЖЁСТКИЙ FALLBACK для популярных стран с реальными ID из Qwintry
-const HARDCODED_COUNTRIES = {
-  'RU': { id: 236, name: 'Россия', code: 'RU' },
-  'KZ': { id: 398, name: 'Казахстан', code: 'KZ' },
-  'BY': { id: 112, name: 'Беларусь', code: 'BY' },
-  'UA': { id: 804, name: 'Украина', code: 'UA' },
-  'DE': { id: 276, name: 'Германия', code: 'DE' },
-  'US': { id: 840, name: 'США', code: 'US' },
-  'CN': { id: 156, name: 'Китай', code: 'CN' },
-  'ES': { id: 724, name: 'Испания', code: 'ES' },
-  'GB': { id: 826, name: 'Великобритания', code: 'GB' },
-  'AU': { id: 36, name: 'Австралия', code: 'AU' },
-  'FR': { id: 250, name: 'Франция', code: 'FR' },
-  'IT': { id: 380, name: 'Италия', code: 'IT' },
-  'PL': { id: 616, name: 'Польша', code: 'PL' },
-  'TR': { id: 792, name: 'Турция', code: 'TR' },
-  'JP': { id: 392, name: 'Япония', code: 'JP' }
-};
-
-// Алиасы популярных стран: ключи — русские и английские варианты, значения — ISO-код
-const COUNTRY_ALIAS_TO_CODE = {
+// Словарь популярных стран с ID и алиасами
+const COUNTRIES_DICT = {
   // Россия
-  'россия': 'RU',
-  'russia': 'RU',
-  'ru': 'RU',
-  'russian federation': 'RU',
-  '236': 'RU',
-
-  // Казахстан
-  'казахстан': 'KZ',
-  'kazakhstan': 'KZ',
-  'kz': 'KZ',
-  '398': 'KZ',
-
-  // Беларусь
-  'беларусь': 'BY',
-  'белоруссия': 'BY',
-  'belarus': 'BY',
-  'by': 'BY',
-  '112': 'BY',
-
-  // Украина
-  'украина': 'UA',
-  'ukraine': 'UA',
-  'ua': 'UA',
-  '804': 'UA',
-
-  // Германия
-  'германия': 'DE',
-  'germany': 'DE',
-  'deutschland': 'DE',
-  'de': 'DE',
-  '276': 'DE',
-
-  // США
-  'сша': 'US',
-  'united states': 'US',
-  'usa': 'US',
-  'us': 'US',
-  'america': 'US',
-  'united states of america': 'US',
-  '840': 'US',
-
-  // Китай
-  'китай': 'CN',
-  'china': 'CN',
-  'cn': 'CN',
-  '156': 'CN',
-
-  // Испания
-  'испания': 'ES',
-  'spain': 'ES',
-  'es': 'ES',
-  '724': 'ES',
-
-  // Великобритания
-  'великобритания': 'GB',
-  'united kingdom': 'GB',
-  'great britain': 'GB',
-  'britain': 'GB',
-  'uk': 'GB',
-  'gb': 'GB',
-  'england': 'GB',
-  'scotland': 'GB',
-  'wales': 'GB',
-  'northern ireland': 'GB',
-  '826': 'GB',
-
-  // Австралия
-  'австралия': 'AU',
-  'australia': 'AU',
-  'au': 'AU',
-  '36': 'AU',
-
-  // Франция
-  'франция': 'FR',
-  'france': 'FR',
-  'fr': 'FR',
-  '250': 'FR',
-
-  // Италия
-  'италия': 'IT',
-  'italy': 'IT',
-  'it': 'IT',
-  '380': 'IT',
-
-  // Польша
-  'польша': 'PL',
-  'poland': 'PL',
-  'pl': 'PL',
-  '616': 'PL',
-
-  // Турция
-  'турция': 'TR',
-  'turkey': 'TR',
-  'tr': 'TR',
-  '792': 'TR',
-
-  // Япония
-  'япония': 'JP',
-  'japan': 'JP',
-  'jp': 'JP',
-  '392': 'JP'
-};
-
-// Fallback для популярных городов (если API не отвечает)
-const HARDCODED_CITIES = {
-  236: { // Россия
-    'москва': { id: 524901, name: 'Москва' },
-    'moscow': { id: 524901, name: 'Москва' },
-    'санкт-петербург': { id: 498817, name: 'Санкт-Петербург' },
-    'saint petersburg': { id: 498817, name: 'Санкт-Петербург' },
-    'спб': { id: 498817, name: 'Санкт-Петербург' },
-    'екатеринбург': { id: 1486209, name: 'Екатеринбург' },
-    'новосибирск': { id: 1496747, name: 'Новосибирск' }
-  },
-  398: { // Казахстан
-    'алматы': { id: 1526273, name: 'Алматы' },
-    'almaty': { id: 1526273, name: 'Алматы' },
-    'астана': { id: 1526384, name: 'Нур-Султан' },
-    'нур-султан': { id: 1526384, name: 'Нур-Султан' },
-    'nur-sultan': { id: 1526384, name: 'Нур-Султан' }
-  },
-  112: { // Беларусь
-    'минск': { id: 625144, name: 'Минск' },
-    'minsk': { id: 625144, name: 'Минск' }
-  },
-  804: { // Украина
-    'киев': { id: 703448, name: 'Киев' },
-    'kiev': { id: 703448, name: 'Киев' },
-    'харьков': { id: 706483, name: 'Харьков' },
-    'одесса': { id: 698740, name: 'Одесса' }
-  }
-};
-
-// Простейший кэш стран на время жизни функции (serverless warm)
-let COUNTRY_CACHE = null;
-let COUNTRY_CACHE_TS = 0;
-const COUNTRY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 минут
-
-export default async function handler(req, res) {
-  try {
-    if (req.method !== 'POST') {
-      return res.status(200).send('OK: use POST from Telegram webhook');
-    }
-
-    const ABACUS_DEPLOYMENT_TOKEN = process.env.ABACUS_DEPLOYMENT_TOKEN;
-    const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-
-    if (!ABACUS_DEPLOYMENT_TOKEN || !TELEGRAM_BOT_TOKEN) {
-      console.error('Missing env vars', {
-        hasAbacus: !!ABACUS_DEPLOYMENT_TOKEN,
-        hasTg: !!TELEGRAM_BOT_TOKEN
-      });
-      return res.status(500).send('Server not configured');
-    }
-
-    const update = req.body || {};
-    const msg = update.message || update.edited_message;
-    if (!msg || (!msg.text && !msg.caption)) {
-      console.log('No text in update:', JSON.stringify(update).slice(0, 500));
-      return res.status(200).send('OK: no text');
-    }
-
-    const chatId = msg.chat.id;
-    const userText = (msg.text || msg.caption || '').trim();
-
-    // если есть активное состояние калькулятора
-    if (userStates[chatId]?.step) {
-      await handleCalcConversation(chatId, userText);
-      return res.status(200).send('OK');
-    }
-
-    // Команда /calc - запускаем пошаговый расчёт
-    if (userText === '/calc') {
-      userStates[chatId] = { step: 'warehouse' };
-      await sendTg(chatId, getWarehouseQuestion());
-      return res.status(200).send('OK');
-    }
-
-    // Команда /cancel - сброс состояния
-    if (userText === '/cancel') {
-      delete userStates[chatId];
-      await sendTg(chatId, '❌ Калькулятор сброшен. Для нового расчёта используйте /calc');
-      return res.status(200).send('OK');
-    }
-
-    // --- всё остальное идёт в Abacus ---
-    const url = `${APPS_GET_CHAT_URL}?deploymentToken=${encodeURIComponent(ABACUS_DEPLOYMENT_TOKEN)}&deploymentId=${encodeURIComponent(DEPLOYMENT_ID)}`;
-    const body = {
-      messages: [{ is_user: true, text: userText }],
-      conversationId: String(chatId),
-      userId: String(chatId)
-    };
-
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
-
-    const raw = await resp.text();
-    let botReply = 'Извините, не удалось получить ответ.';
-    if (resp.ok) {
-      try {
-        const data = JSON.parse(raw || '{}');
-        botReply =
-          data?.responseText ||
-          data?.text ||
-          data?.response ||
-          data?.message ||
-          data?.choices?.[0]?.message?.content ||
-          data?.result?.text ||
-          botReply;
-
-        if (!data?.responseText && data?.result?.messages?.length) {
-          const lastAssistant = [...data.result.messages].reverse().find(m => m && m.is_user === false && typeof m.text === 'string');
-          if (lastAssistant?.text) botReply = lastAssistant.text;
-        }
-
-        if (!botReply || typeof botReply !== 'string' || !botReply.trim()) {
-          botReply = 'Извините, не удалось получить ответ.';
-        }
-      } catch (e) {
-        console.error('JSON parse error:', e);
-      }
-    } else {
-      console.error('Abacus non-OK', resp.status, raw.slice(0, 500));
-    }
-
-    await sendTg(chatId, botReply);
-    return res.status(200).send('OK');
-  } catch (e) {
-    console.error('Webhook error:', e);
-    return res.status(200).send('OK');
-  }
-}
-
-// ----------------- helpers -----------------
-
-function getWarehouseQuestion() {
-  return `📦 Калькулятор доставки
-
-Выберите склад отправления (введите номер):
-
-1️⃣ США
-2️⃣ Германия  
-3️⃣ Великобритания
-4️⃣ Китай
-5️⃣ Испания
-
-Например: 1
-
-💡 Для отмены используйте /cancel`;
-}
-
-// Пошаговый калькулятор
-async function handleCalcConversation(chatId, text) {
-  const state = userStates[chatId] || {};
-  const command = text.trim();
-
-  // ✅ Сброс сценария если пришла команда /calc
-  if (command === '/calc') {
-    userStates[chatId] = { step: 'warehouse' };
-    await sendTg(chatId, getWarehouseQuestion());
-    return;
-  }
-
-  // ✅ /cancel в любой момент
-  if (command === '/cancel') {
-    delete userStates[chatId];
-    await sendTg(chatId, '❌ Калькулятор сброшен. Для нового расчёта используйте /calc');
-    return;
-  }
-
-  if (state.step === 'warehouse') {
-    const warehouseNum = command;
-    if (!WAREHOUSES[warehouseNum]) {
-      await sendTg(chatId, `❌ Неверный номер склада. Выберите от 1 до 5:
-
-1️⃣ США
-2️⃣ Германия  
-3️⃣ Великобритания
-4️⃣ Китай
-5️⃣ Испания
-
-💡 Для отмены используйте /cancel`);
-      return;
-    }
-    state.warehouse = WAREHOUSES[warehouseNum];
-    state.step = 'country';
-    await sendTg(chatId, `✅ Склад: ${state.warehouse.name}
-
-🌍 Введите название страны назначения:
-
-Можно писать:
-• По-русски: Россия, Казахстан, Беларусь
-• По-английски: Russia, Kazakhstan, Belarus  
-• Код страны: RU, KZ, BY
-• Можно даже ID (например, 236 для России)
-
-💡 Для отмены используйте /cancel`);
-  } else if (state.step === 'country') {
-    const countryInput = command;
-    if (countryInput.length < 2) {
-      await sendTg(chatId, '❌ Введите название страны / код / ID (например: Россия, Russia, RU или 236)\n\n💡 Для отмены используйте /cancel');
-      return;
-    }
-
-    await sendTg(chatId, '🔍 Ищу страну в базе данных...');
-
-    const countryData = await findCountry(countryInput);
-    if (!countryData) {
-      await sendTg(chatId, `❌ Страна "${countryInput}" не найдена в базе Qwintry.
-
-Попробуйте:
-• Россия / Russia / RU / 236
-• Казахстан / Kazakhstan / KZ  
-• Беларусь / Belarus / BY
-• Украина / Ukraine / UA
-• Германия / Germany / DE
-
-💡 Для отмены используйте /cancel`);
-      return;
-    }
-
-    state.country = countryData;
-    state.step = 'city';
-    await sendTg(chatId, `✅ Страна: ${countryData.name}
-
-🏙️ Введите название города назначения:
-
-Например: Москва, Алматы, Минск, Киев, Берлин и т.д.
-
-💡 Для отмены используйте /cancel`);
-  } else if (state.step === 'city') {
-    const cityName = command;
-    if (cityName.length < 2) {
-      await sendTg(chatId, '❌ Введите название города (например: Москва, Алматы, Минск)\n\n💡 Для отмены используйте /cancel');
-      return;
-    }
-
-    await sendTg(chatId, '🔍 Ищу город в базе данных...');
-
-    const cityData = await findCity(state.country.id, cityName);
-    if (!cityData) {
-      await sendTg(chatId, `❌ Город "${cityName}" не найден в стране ${state.country.name}.
-
-Попробуйте:
-• Проверить правильность написания
-• Ввести название на английском языке
-• Выбрать крупный город в этой стране
-
-💡 Для отмены используйте /cancel`);
-      return;
-    }
-
-    state.city = cityData;
-    state.step = 'weight';
-    await sendTg(chatId, `✅ Направление: ${state.warehouse.name} → ${state.country.name}, ${cityData.name}
-
-⚖️ Введите вес посылки в килограммах:
-
-Например: 2.5 или 3 или 0.5
-
-💡 Для отмены используйте /cancel`);
-  } else if (state.step === 'weight') {
-    const weight = parseFloat(command.replace(',', '.'));
-    if (isNaN(weight) || weight <= 0 || weight > 50) {
-      await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: 2.5 или 3\n\n💡 Для отмены используйте /cancel');
-      return;
-    }
-
-    state.weight = weight.toString();
-    state.step = null; // сброс состояния
-
-    await sendTg(chatId, '⏳ Рассчитываю стоимость доставки...');
-    await doCalc(chatId, state.warehouse.code, state.country.id, state.city.id, state.weight, state.country.name, state.city.name);
-    delete userStates[chatId];
-  }
-
-  userStates[chatId] = state;
-}
-
-// utils: нормализация строки
-function norm(s) {
-  return String(s || '')
-    .toLowerCase()
-    .trim()
-    .replace(/\s+/g, ' ');
-}
-
-// Получение списка стран (с кэшем)
-async function getCountries() {
-  const now = Date.now();
-  if (COUNTRY_CACHE && (now - COUNTRY_CACHE_TS) < COUNTRY_CACHE_TTL_MS) {
-    return COUNTRY_CACHE;
-  }
-  try {
-    const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/countries', {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    });
-    if (!resp.ok) {
-      console.error('Countries API failed:', resp.status);
-      return null;
-    }
-    const list = await resp.json();
-    if (!Array.isArray(list)) {
-      console.error('Countries API returned non-array');
-      return null;
-    }
-    COUNTRY_CACHE = list;
-    COUNTRY_CACHE_TS = now;
-    console.log(`Loaded countries: ${list.length}`);
-    return list;
-  } catch (e) {
-    console.error('Countries fetch error:', e);
-    return null;
-  }
-}
-
-// 🔥 УЛУЧШЕННЫЙ поиск страны с жёстким fallback
-async function findCountry(input) {
-  const inputRaw = String(input).trim();
-  const inputLower = norm(inputRaw);
-
-  console.log(`🔍 Searching country for: "${inputRaw}"`);
-
-  // 1️⃣ ПРИОРИТЕТ: Проверяем алиасы (включая числовые ID)
-  const isoFromAlias = COUNTRY_ALIAS_TO_CODE[inputLower];
-  if (isoFromAlias) {
-    const hardcoded = HARDCODED_COUNTRIES[isoFromAlias];
-    if (hardcoded) {
-      console.log(`✅ Found via alias: ${inputRaw} → ${isoFromAlias} → ${hardcoded.name} (${hardcoded.id})`);
-      return { id: hardcoded.id, name: hardcoded.name };
-    }
-  }
-
-  // 2️⃣ Прямая проверка ISO-кода в жёстком списке
-  if (/^[A-Za-z]{2}$/.test(inputRaw)) {
-    const isoUpper = inputRaw.toUpperCase();
-    const hardcoded = HARDCODED_COUNTRIES[isoUpper];
-    if (hardcoded) {
-      console.log(`✅ Found via ISO: ${isoUpper} → ${hardcoded.name} (${hardcoded.id})`);
-      return { id: hardcoded.id, name: hardcoded.name };
-    }
-  }
-
-  // 3️⃣ Числовой ID в жёстком списке
-  if (/^\d+$/.test(inputLower)) {
-    const idNum = parseInt(inputLower, 10);
-    const hardcoded = Object.values(HARDCODED_COUNTRIES).find(c => c.id === idNum);
-    if (hardcoded) {
-      console.log(`✅ Found via numeric ID: ${idNum} → ${hardcoded.name}`);
-      return { id: hardcoded.id, name: hardcoded.name };
-    }
-  }
-
-  // 4️⃣ Попытка через API (если доступен)
-  const countries = await getCountries();
-  if (countries && countries.length > 0) {
-    // Числовой ID через API
-    if (/^\d+$/.test(inputLower)) {
-      const idNum = parseInt(inputLower, 10);
-      const byId = countries.find(c => Number(c?.id) === idNum);
-      if (byId) {
-        const name = byId.name || byId.name_en || byId.name_ru || byId.title || `#${byId.id}`;
-        console.log(`✅ Found via API numeric ID: ${name} (${byId.id})`);
-        return { id: byId.id, name };
-      }
-    }
-
-    // ISO-код через API
-    if (/^[A-Za-z]{2}$/.test(inputRaw)) {
-      const isoUpper = inputRaw.toUpperCase();
-      const byCode = countries.find(c => {
-        const code = (c.code || c.alpha2 || c.iso || c.country_code || '').toUpperCase();
-        return code === isoUpper;
-      });
-      if (byCode) {
-        const name = byCode.name || byCode.name_en || byCode.name_ru || byCode.title || isoUpper;
-        console.log(`✅ Found via API ISO: ${isoUpper} → ${name} (${byCode.id})`);
-        return { id: byCode.id, name };
-      }
-    }
-
-    // Точное совпадение по названию через API
-    const byNameExact = countries.find(c => {
-      const fields = [
-        c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
-      ].filter(Boolean).map(norm);
-      return fields.includes(inputLower);
-    });
-    if (byNameExact) {
-      const name = byNameExact.name || byNameExact.name_en || byNameExact.name_ru || byNameExact.title || inputRaw;
-      console.log(`✅ Found via API exact name: ${name} (${byNameExact.id})`);
-      return { id: byNameExact.id, name };
-    }
-
-    // Частичное совпадение через API
-    const byNamePartial = countries.find(c => {
-      const fields = [
-        c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
-      ].filter(Boolean).map(norm);
-      return fields.some(f => f.includes(inputLower) || inputLower.includes(f));
-    });
-    if (byNamePartial) {
-      const name = byNamePartial.name || byNamePartial.name_en || byNamePartial.name_ru || byNamePartial.title || inputRaw;
-      console.log(`✅ Found via API partial: ${name} (${byNamePartial.id})`);
-      return { id: byNamePartial.id, name };
-    }
-  } else {
-    console.log(`⚠️ API countries not available, using hardcoded only`);
-  }
-
-  console.log(`❌ Country not found: "${inputRaw}"`);
-  return null;
-}
-
-// 🔥 УЛУЧШЕННЫЙ поиск города с fallback
-async function findCity(countryId, cityName) {
-  const cityNorm = norm(cityName);
+  'россия': { id: 71, name: 'Россия' },
+  'russia': { id: 71, name: 'Россия' },
+  'ru': { id: 71, name: 'Россия' },
+  'рф': { id: 71, name: 'Россия' },
+  '71': { id: 71, name: 'Россия' },
   
-  console.log(`🔍 Searching city "${cityName}" in country ${countryId}`);
+  // США
+  'сша': { id: 92, name: 'США' },
+  'usa': { id: 92, name: 'США' },
+  'us': { id: 92, name: 'США' },
+  'америка': { id: 92, name: 'США' },
+  'america': { id: 92, name: 'США' },
+  '92': { id: 92, name: 'США' },
+  
+  // Другие популярные страны
+  'украина': { id: 93, name: 'Украина' },
+  'ukraine': { id: 93, name: 'Украина' },
+  'ua': { id: 93, name: 'Украина' },
+  
+  'беларусь': { id: 7, name: 'Беларусь' },
+  'belarus': { id: 7, name: 'Беларусь' },
+  'by': { id: 7, name: 'Беларусь' },
+  
+  'казахстан': { id: 36, name: 'Казахстан' },
+  'kazakhstan': { id: 36, name: 'Казахстан' },
+  'kz': { id: 36, name: 'Казахстан' },
+  
+  'германия': { id: 22, name: 'Германия' },
+  'germany': { id: 22, name: 'Германия' },
+  'de': { id: 22, name: 'Германия' },
+  
+  'китай': { id: 14, name: 'Китай' },
+  'china': { id: 14, name: 'Китай' },
+  'cn': { id: 14, name: 'Китай' }
+};
 
-  // 1️⃣ Проверяем жёсткий fallback для популярных городов
-  const hardcodedCities = HARDCODED_CITIES[countryId];
-  if (hardcodedCities && hardcodedCities[cityNorm]) {
-    const city = hardcodedCities[cityNorm];
-    console.log(`✅ Found via hardcoded: ${city.name} (${city.id})`);
-    return { id: city.id, name: city.name };
+// Словарь популярных городов России
+const CITIES_DICT = {
+  'москва': { id: 4050, name: 'Москва' },
+  'moscow': { id: 4050, name: 'Москва' },
+  'спб': { id: 4079, name: 'Санкт-Петербург' },
+  'санкт-петербург': { id: 4079, name: 'Санкт-Петербург' },
+  'питер': { id: 4079, name: 'Санкт-Петербург' },
+  'екатеринбург': { id: 4018, name: 'Екатеринбург' },
+  'новосибирск': { id: 4065, name: 'Новосибирск' },
+  'казань': { id: 4035, name: 'Казань' },
+  'нижний новгород': { id: 4063, name: 'Нижний Новгород' },
+  'челябинск': { id: 4090, name: 'Челябинск' },
+  'омск': { id: 4067, name: 'Омск' },
+  'самара': { id: 4077, name: 'Самара' },
+  'ростов-на-дону': { id: 4075, name: 'Ростов-на-Дону' },
+  'уфа': { id: 4087, name: 'Уфа' },
+  'красноярск': { id: 4044, name: 'Красноярск' },
+  'воронеж': { id: 4013, name: 'Воронеж' },
+  'пермь': { id: 4070, name: 'Пермь' },
+  'волгоград': { id: 4012, name: 'Волгоград' }
+};
+
+// Эмодзи для тарифов
+const TARIFF_EMOJIS = {
+  'qwintry_flash': '⚡',
+  'ecopost': '🌍',
+  'qwair': '✈️',
+  'qwintry_smart': '🚀'
+};
+
+// Основная функция обработки webhook
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // 2️⃣ Поиск через API
   try {
-    const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/cities', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        country: countryId,
-        query: cityName
-      })
-    });
-
-    if (!resp.ok) {
-      console.error('Cities API failed:', resp.status);
-      return null;
+    const { message } = req.body;
+    
+    if (!message || !message.text) {
+      return res.status(200).json({ ok: true });
     }
 
-    const cities = await resp.json();
-    if (!Array.isArray(cities) || cities.length === 0) {
-      console.log(`❌ No cities found via API for "${cityName}" in country ${countryId}`);
-      return null;
+    const chatId = message.chat.id;
+    const text = message.text.trim();
+
+    console.log(`📨 Получено сообщение от ${chatId}: "${text}"`);
+
+    // Команды бота
+    if (text === '/start') {
+      await sendMessage(chatId, 
+        "🚀 Привет! Я бот для расчета стоимости доставки через Qwintry.\n\n" +
+        "📝 Для расчета напишите:\n" +
+        "**вес страна город**\n\n" +
+        "📋 Примеры:\n" +
+        "• `2 россия москва`\n" +
+        "• `1.5 russia spb`\n" +
+        "• `3 рф екатеринбург`\n\n" +
+        "❓ Для помощи: /help"
+      );
+      return res.status(200).json({ ok: true });
     }
 
-    // Предпочтительно точное совпадение по названию, иначе первый
-    const exact = cities.find(c => norm(c.name) === cityNorm) || cities[0];
+    if (text === '/help') {
+      await sendMessage(chatId,
+        "📖 **Как пользоваться ботом:**\n\n" +
+        "🔢 **Формат:** `вес страна город`\n" +
+        "• Вес в килограммах (можно дробный: 1.5, 2.3)\n" +
+        "• Страна назначения (россия, russia, рф, ru)\n" +
+        "• Город назначения\n\n" +
+        "✅ **Примеры:**\n" +
+        "• `2 россия москва`\n" +
+        "• `1.5 russia санкт-петербург`\n" +
+        "• `3.2 рф казань`\n" +
+        "• `0.5 ru новосибирск`\n\n" +
+        "🌍 **Поддерживаемые страны:**\n" +
+        "Россия, США, Украина, Беларусь, Казахстан и другие\n\n" +
+        "💡 **Совет:** Пишите названия на русском или английском языке"
+      );
+      return res.status(200).json({ ok: true });
+    }
 
-    console.log(`✅ Found via API: ${exact.name} (ID: ${exact.id}) in country ${countryId}`);
-    return { id: exact.id, name: exact.name };
+    // Обработка запроса на расчет доставки
+    if (text && !text.startsWith('/')) {
+      await handleCalculationRequest(chatId, text);
+    }
 
-  } catch (e) {
-    console.error('City search error:', e);
-    return null;
+    return res.status(200).json({ ok: true });
+
+  } catch (error) {
+    console.error('❌ Ошибка в webhook:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 }
 
-// 🔥 ИСПРАВЛЕННЫЙ запрос в API калькулятора Qwintry с поддержкой всех 4 тарифов
-async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityName) {
-  const body = {
-    hub: hub,
-    weight: weight.toString(),
-    weightMeasurement: 'kg',
-    dimensions: '1x1x1',
-    dimensionsMeasurement: 'cm',
-    country: countryId,
-    city: cityId,
-    zip: '100000',
-    itemsCost: '1',
-    insurance: null,
-    advancedMode: false,
-    source: 'calc'
-  };
-
+// Обработка запроса на расчет
+async function handleCalculationRequest(chatId, text) {
   try {
-    console.log(`🚀 Calling Qwintry API with:`, JSON.stringify(body, null, 2));
+    // Парсинг входных данных
+    const parts = text.toLowerCase().split(/\s+/).filter(p => p.length > 0);
     
-    const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/calculate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    });
+    if (parts.length < 3) {
+      await sendMessage(chatId, 
+        "❌ **Неверный формат!**\n\n" +
+        "📝 Используйте: `вес страна город`\n" +
+        "📋 Пример: `2 россия москва`\n\n" +
+        "❓ Помощь: /help"
+      );
+      return;
+    }
 
-    const data = await resp.json();
-    console.log(`📦 Qwintry API response:`, JSON.stringify(data, null, 2));
+    const weightStr = parts[0];
+    const countryStr = parts[1];
+    const cityStr = parts.slice(2).join(' ');
 
-    // Проверяем наличие тарифов
-    if (data?.costs && Object.keys(data.costs).length > 0) {
-      let reply = `📦 Стоимость доставки\n`;
-      reply += `📍 Маршрут: ${hub} → ${countryName}, ${cityName}\n`;
-      reply += `⚖️ Вес: ${weight} кг\n\n`;
+    // Проверка веса
+    const weight = parseFloat(weightStr);
+    if (isNaN(weight) || weight <= 0 || weight > 50) {
+      await sendMessage(chatId, 
+        "❌ **Неверный вес!**\n\n" +
+        "📏 Укажите вес от 0.1 до 50 кг\n" +
+        "📋 Пример: `2.5 россия москва`"
+      );
+      return;
+    }
 
-      // Получаем все методы доставки
-      const methods = Object.entries(data.costs);
-      let methodIndex = 1;
+    console.log(`🔍 Парсинг: вес=${weight}, страна="${countryStr}", город="${cityStr}"`);
 
-      methods.forEach(([methodKey, details]) => {
-        // Извлекаем данные о тарифе
-        const label = details?.label || details?.name || methodKey;
-        const cost = details?.cost || details;
-        
-        // Пытаемся найти цену в разных полях
-        const price = cost?.costWithDiscount 
-                   || cost?.shippingCost 
-                   || cost?.cost 
-                   || cost?.price 
-                   || 0;
-        
-        const total = cost?.totalCostWithDiscount 
-                   || cost?.totalCost 
-                   || cost?.total 
-                   || price;
-        
-        const days = details?.days 
-                  || details?.deliveryTime 
-                  || details?.time 
-                  || '?';
+    // Поиск страны
+    const country = await findCountry(countryStr);
+    if (!country) {
+      await sendMessage(chatId, 
+        `❌ **Страна "${countryStr}" не найдена!**\n\n` +
+        "🌍 **Поддерживаемые страны:**\n" +
+        "• Россия (россия, russia, рф, ru)\n" +
+        "• США (сша, usa, us)\n" +
+        "• Украина (украина, ukraine, ua)\n" +
+        "• Беларусь (беларусь, belarus, by)\n" +
+        "• Казахстан (казахстан, kazakhstan, kz)\n" +
+        "• И другие...\n\n" +
+        "💡 Попробуйте написать по-другому"
+      );
+      return;
+    }
 
-        // Форматируем вывод
-        reply += `${methodIndex}. ${label}\n`;
-        reply += `💰 Доставка: $${price}\n`;
-        reply += `💳 Итого: $${total}\n`;
-        reply += `⏰ Срок: ${days} дней\n\n`;
-        
-        methodIndex++;
-      });
+    // Поиск города
+    const city = await findCity(cityStr, country.id);
+    if (!city) {
+      await sendMessage(chatId, 
+        `❌ **Город "${cityStr}" не найден в стране ${country.name}!**\n\n` +
+        "🏙️ **Популярные города России:**\n" +
+        "• Москва, Санкт-Петербург, Екатеринбург\n" +
+        "• Новосибирск, Казань, Челябинск\n" +
+        "• Омск, Самара, Ростов-на-Дону\n\n" +
+        "💡 Проверьте правильность написания"
+      );
+      return;
+    }
 
-      reply += `ℹ️ Цены указаны в долларах США\n`;
-      reply += `📱 Для нового расчёта используйте /calc`;
+    console.log(`✅ Найдено: ${country.name} (${country.id}), ${city.name} (${city.id})`);
 
-      await sendTg(chatId, reply.trim());
-      
-    } else if (data?.error) {
-      // Если API вернул ошибку
-      console.error('Qwintry API error:', data.error);
-      await sendTg(chatId, `❌ Ошибка расчёта: ${data.error}\n\nПопробуйте другой склад или проверьте данные.\n\n📱 Для нового расчёта используйте /calc`);
-      
+    // Отправка сообщения о начале расчета
+    await sendMessage(chatId, "⏳ Рассчитываю стоимость доставки...");
+
+    // Расчет доставки
+    const result = await calculateDelivery(weight, country.id, city.id);
+    
+    if (result.success) {
+      const formattedResult = formatDeliveryResult(result.data, country.name, city.name, weight);
+      await sendMessage(chatId, formattedResult);
     } else {
-      // Если нет тарифов, но и нет ошибки
-      console.log('No costs returned from Qwintry API');
-      await sendTg(chatId,
-`❌ Не удалось рассчитать доставку для маршрута ${hub} → ${countryName}, ${cityName}
-
-Возможные причины:
-• Данный маршрут временно недоступен
-• Превышены лимиты по весу
-• Временные технические проблемы
-
-Попробуйте:
-• Другой склад (например, Германия вместо США)
-• Меньший вес посылки
-• Проверить на официальном сайте: https://qwintry.com/ru/calculator/ru
-
-📱 Для нового расчёта используйте /calc`
+      await sendMessage(chatId, 
+        `❌ **Ошибка расчета доставки:**\n${result.error}\n\n` +
+        "🔄 Попробуйте еще раз или обратитесь в поддержку"
       );
     }
-  } catch (err) {
-    console.error('Calc API error:', err);
-    await sendTg(chatId,
-      `❌ Произошла ошибка при расчёте доставки.
 
-Попробуйте позже или воспользуйтесь официальным калькулятором:
-https://qwintry.com/ru/calculator/ru
-
-📱 Для нового расчёта используйте /calc`
+  } catch (error) {
+    console.error('❌ Ошибка обработки запроса:', error);
+    await sendMessage(chatId, 
+      "❌ **Произошла ошибка при обработке запроса**\n\n" +
+      "🔄 Попробуйте еще раз через несколько секунд"
     );
   }
 }
 
-// Отправка текста
-async function sendTg(chatId, text) {
-  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-  try {
-    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text })
-    });
-    const raw = await resp.text();
-    if (!resp.ok) {
-      console.error('Telegram sendMessage error', resp.status, raw.slice(0, 300));
-    }
-    return raw;
-  } catch (e) {
-    console.error('sendTg error:', e);
-    return null;
+// Поиск страны
+async function findCountry(query) {
+  const normalizedQuery = query.toLowerCase().trim();
+  
+  // Поиск в словаре
+  if (COUNTRIES_DICT[normalizedQuery]) {
+    console.log(`🎯 Страна найдена в словаре: ${COUNTRIES_DICT[normalizedQuery].name}`);
+    return COUNTRIES_DICT[normalizedQuery];
   }
+
+  // Поиск через API
+  try {
+    if (!countriesCache) {
+      console.log('📡 Загружаем список стран из API...');
+      const response = await fetch('https://q3-api.qwintry.com/ru/countries');
+      if (response.ok) {
+        countriesCache = await response.json();
+        console.log(`✅ Загружено ${countriesCache.length} стран`);
+      }
+    }
+
+    if (countriesCache && Array.isArray(countriesCache)) {
+      const found = countriesCache.find(country => 
+        country.nameRu?.toLowerCase().includes(normalizedQuery) ||
+        country.nameEn?.toLowerCase().includes(normalizedQuery) ||
+        country.code?.toLowerCase() === normalizedQuery ||
+        country.id?.toString() === normalizedQuery
+      );
+
+      if (found) {
+        console.log(`🎯 Страна найдена через API: ${found.nameRu || found.nameEn}`);
+        return { id: found.id, name: found.nameRu || found.nameEn };
+      }
+    }
+  } catch (error) {
+    console.error('❌ Ошибка поиска страны через API:', error);
+  }
+
+  console.log(`❌ Страна "${query}" не найдена`);
+  return null;
+}
+
+// Поиск города
+async function findCity(query, countryId) {
+  const normalizedQuery = query.toLowerCase().trim();
+  
+  // Поиск в словаре (только для России)
+  if (countryId === 71 && CITIES_DICT[normalizedQuery]) {
+    console.log(`🎯 Город найден в словаре: ${CITIES_DICT[normalizedQuery].name}`);
+    return CITIES_DICT[normalizedQuery];
+  }
+
+  // Поиск через API
+  try {
+    const cacheKey = `${countryId}_${normalizedQuery}`;
+    
+    if (!citiesCache[cacheKey]) {
+      console.log(`📡 Ищем город "${query}" в стране ${countryId}...`);
+      
+      const response = await fetch(
+        `https://q3-api.qwintry.com/ru/cities?country_id=${countryId}&query=${encodeURIComponent(query)}`
+      );
+      
+      if (response.ok) {
+        const cities = await response.json();
+        citiesCache[cacheKey] = cities;
+        console.log(`✅ Найдено ${cities.length} городов`);
+      }
+    }
+
+    const cities = citiesCache[cacheKey];
+    if (cities && Array.isArray(cities) && cities.length > 0) {
+      const found = cities.find(city => 
+        city.nameRu?.toLowerCase() === normalizedQuery ||
+        city.nameEn?.toLowerCase() === normalizedQuery
+      ) || cities[0]; // Берем первый найденный город
+
+      if (found) {
+        console.log(`🎯 Город найден: ${found.nameRu || found.nameEn}`);
+        return { id: found.id, name: found.nameRu || found.nameEn };
+      }
+    }
+  } catch (error) {
+    console.error('❌ Ошибка поиска города через API:', error);
+  }
+
+  console.log(`❌ Город "${query}" не найден`);
+  return null;
+}
+
+// Расчет стоимости доставки
+async function calculateDelivery(weight, countryId, cityId) {
+  try {
+    console.log(`📊 Расчет доставки: вес=${weight}кг, страна=${countryId}, город=${cityId}`);
+
+    const params = new URLSearchParams({
+      weight: weight.toString(),
+      country: countryId.toString(),
+      city: cityId.toString(),
+      weightMeasurement: 'kg',
+      dimensions: '1x1x1',
+      dimensionsMeasurement: 'cm'
+    });
+
+    const response = await fetch('https://q3-api.qwintry.com/ru/calculate', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json'
+      },
+      body: params.toString()
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    console.log('📦 Ответ API получен:', JSON.stringify(data, null, 2));
+
+    if (!data.costs || Object.keys(data.costs).length === 0) {
+      return {
+        success: false,
+        error: 'Нет доступных способов доставки для данного маршрута'
+      };
+    }
+
+    return { success: true, data };
+
+  } catch (error) {
+    console.error('❌ Ошибка расчета доставки:', error);
+    return {
+      success: false,
+      error: `Ошибка API: ${error.message}`
+    };
+  }
+}
+
+// Форматирование результата
+function formatDeliveryResult(data, countryName, cityName, weight) {
+  if (!data.costs || Object.keys(data.costs).length === 0) {
+    return "❌ Нет доступных способов доставки для этого маршрута.";
+  }
+
+  let message = `📦 **Доставка из США → ${countryName} (${cityName})**\n`;
+  message += `⚖️ Вес: ${weight} кг\n\n`;
+
+  // Сортируем тарифы по цене
+  const sortedTariffs = Object.entries(data.costs)
+    .map(([key, option]) => ({
+      key,
+      option,
+      price: option.cost?.totalCostWithDiscount || option.cost?.totalCost || 0
+    }))
+    .sort((a, b) => a.price - b.price);
+
+  for (const { key, option } of sortedTariffs) {
+    if (!option?.cost) continue;
+
+    const emoji = TARIFF_EMOJIS[key] || '📦';
+    const label = option.cost.label || key;
+    const price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+    const currency = option.cost.currency || '$';
+    const days = option.days || '—';
+
+    message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
+  }
+
+  // Добавляем информацию о таможне для России
+  if (data.country_info?.customs_limit) {
+    message += `\n💡 **Таможня:** ${data.country_info.customs_limit}`;
+  }
+
+  message += `\n\n🔗 [Подробнее на сайте](https://qwintry.com/ru/calculator)`;
+
+  return message;
+}
+
+// Отправка сообщения в Telegram
+async function sendMessage(chatId, text) {
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text,
+        parse_mode: 'Markdown',
+        disable_web_page_preview: true
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('❌ Ошибка отправки сообщения:', errorData);
+    } else {
+      console.log('✅ Сообщение отправлено успешно');
+    }
+  } catch (error) {
+    console.error('❌ Ошибка отправки сообщения:', error);
+  }
+}
+
+// Функция для получения ответа от Abacus AI (если нужно)
+async function getAbacusResponse(message) {
+  try {
+    const response = await fetch('https://api.abacus.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ABACUS_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: 'Ты помощник по доставке товаров через сервис Qwintry. Отвечай кратко и по делу.'
+          },
+          {
+            role: 'user',
+            content: message
+          }
+        ],
+        max_tokens: 500,
+        temperature: 0.7
+      }),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return data.choices[0]?.message?.content || 'Извините, не могу ответить на этот вопрос.';
+    }
+  } catch (error) {
+    console.error('❌ Ошибка Abacus AI:', error);
+  }
+  
+  return 'Извините, сервис временно недоступен.';
 }
