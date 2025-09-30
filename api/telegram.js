@@ -633,13 +633,14 @@ async function calculateDelivery(weight, countryId, cityId, hubCode) {
 
     const payload = {
   weight: weight.toString(),
-  country: "RU",           // 👈 пока хардкод, чтобы проверить
-  city: cityId.toString(),
   weightMeasurement: "kg",
-  dimensions: "1x1x1",     // 👈 как в реальном запросе
+  dimensions: "1x1x1",
   dimensionsMeasurement: "cm",
-  hubCode: "EU1",          // 👈 принудительно для DE
-  insurance: "gg",
+  hubCode: "DE1",
+  country: "RU",            // вместо 71
+  zip: "100000",            // добавить
+  city: cityId.toString(),
+  insurance: null,
   itemsCost: "1",
   itemsCostInUSD: 1
 };
