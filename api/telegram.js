@@ -1,43 +1,4 @@
-Вводные для нового чата
-1. 📦 Что мы делаем
-Telegram‑бот для сервиса Qwintry (Бандеролька).
-Основные задачи бота:
-Калькулятор стоимости доставки (по складам → страна → город → вес).
-Скидки и акции.
-FAQ.
-AI‑консультант (через Abacus AI).
-2. 🌍 Склады и тарифы
-US (US1) → 4 тарифа: Flash, Economy, Air, Smart.
-DE (EU1) → только EcoPost (Qwintry Economy).
-UK (UK1) → только EcoPost.
-ES (ES1) → только EcoPost.
-CN (CN1) → свои спец. тарифы Optima и Ultra.
-3. ✨ Проблема, которую решаем
-Для Германии / UK / Испании бот показывает не тот тариф или неверную цену.
-На сайте Qwintry калькулятор для EcoPost считает так:
-shippingCost + packingCost (фикс $7) + gatewayFee ≈ цена (без страховки)
-Например:
-3 кг Германия → Москва = 44 + 7 + 1.87 = 52.87$
-5 кг Германия → Москва = 56.5 + 7 + 2.32 = 65.82$
-В API JSON мы видим insuranceCost: 3 автоматом, из-за чего итог (totalCostWithDiscount) получается больше (77.56). Но на сайте страховка считается опциональной.
-4. ⚡ Решение
-Для US/CN → использовать totalCostWithDiscount напрямую.
-Для DE/UK/ES (ecopost) → пересчитывать вручную:
-js
-Copy
-price = shippingCost + 7 + gatewayFee;
-(страховку игнорировать).
-5. 💡 Где фиксить в коде
-В функции formatDeliveryResult.
-Там в блоке обработки тарифов нужно:
-Отфильтровать для DE/UK/ES только ecopost.
-При расчёте ecopost‑цены не использовать totalCost / totalCostWithDiscount, а вручную собрать сумму.
-🚀 Итог
-В новом чате, когда ты пришлёшь свежий код, я уже буду знать:
-Что бот делает.
-Какое API используем.
-Где баг (цена EcoPost завышена).
-Как её чинить (ручная формула).                                 // Telegram Bot для Qwintry - Полная версия с исправлениями
+// Telegram Bot для Qwintry - Полная версия с исправлениями
 // Токены и конфигурация
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ABACUS_API_KEY = process.env.ABACUS_API_KEY;
@@ -303,7 +264,7 @@ async function handleCountrySelection(chatId, userId, countryId) {
 // Выбор города
 async function showCitySelection(chatId, userId, countryId) {
   const cities = CITIES[countryId] || {};
-  const cityButtons = Object.entries(cities).map(([id, name]) =>
+  const cityButtons = Object.entries(cities).map(([id, name]) => 
     [{ text: name, callback_data: `city_${id}` }]
   );
 
@@ -466,22 +427,20 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
   let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n`;
   message += `⚖️ Вес: ${weight} кг\n\n`;
 
-  costs.forEach(([key, option]) => {
+costs.forEach(([key, option]) => {
     if (!option?.cost) return;
 
     const emoji = TARIFF_EMOJIS[key] || '📦';
     const label = option.cost.label || key;
 
     let price;
-      if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
-      // 🔥 ФИКС: ручной расчет для EcoPost (игнорируем totalCost из API)
+    if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
       const shipping = option.cost.shippingCost || 0;
       const fee = option.cost.gatewayFee || 0;
-      const packing = 3.5; // фиксированная стоимость упаковки (исправлено с 7 на 3.5)
+      const packing = 3.5; // правильная стоимость упаковки
       price = +(shipping + packing + fee).toFixed(2);
-      console.log(`🔧 EcoPost calc: shipping=${shipping} + packing=${packing} + fee=${fee} = ${price}`);
     } else {
-      // Для US / CN используем totalCost из API
+      // Для US / CN оставляем как есть
       price = option.cost.totalCostWithDiscount || option.cost.totalCost;
     }
 
@@ -489,7 +448,7 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
     const days = option.days || '—';
 
     message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
-  });
+});
 
   // Подсказка для EU
   if (["DE", "UK", "ES"].includes(warehouseCode)) {
