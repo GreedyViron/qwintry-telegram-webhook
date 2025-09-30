@@ -1,402 +1,349 @@
-import axios from "axios";
+// api/telegram.js
+// Telegram webhook → Abacus.AI + калькулятор доставки Qwintry
 
-const TOKEN = process.env.BOT_TOKEN;
-const API = `https://api.telegram.org/bot${TOKEN}`;
+const APPS_GET_CHAT_URL = 'https://apps.abacus.ai/api/getChatResponse';
+const DEPLOYMENT_ID = '1413dbc596';
+
+// для хранения состояний диалога калькулятора
+const userStates = {};
 
 export default async function handler(req, res) {
-  console.log(">>> BOT ONLINE ✅ Update received:", JSON.stringify(req.body, null, 2));
-  
-  if (req.method === "POST") {
-    const body = req.body;
-    
-    if (body.message) {
-      await handleMessage(body.message);
-    } else if (body.callback_query) {
-      await handleCallback(body.callback_query);
-    }
-    return res.status(200).end("ok");
-  }
-  res.status(200).send("Bot running");
-}
-
-// === Отправка сообщений ===
-async function sendMessage(chatId, text, replyMarkup = null) {
   try {
-    const payload = {
-      chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
+    if (req.method !== 'POST') {
+      return res.status(200).send('OK: use POST from Telegram webhook');
+    }
+
+    const ABACUS_DEPLOYMENT_TOKEN = process.env.ABACUS_DEPLOYMENT_TOKEN;
+    const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+
+    if (!ABACUS_DEPLOYMENT_TOKEN || !TELEGRAM_BOT_TOKEN) {
+      console.error('Missing env vars', {
+        hasAbacus: !!ABACUS_DEPLOYMENT_TOKEN,
+        hasTg: !!TELEGRAM_BOT_TOKEN
+      });
+      return res.status(500).send('Server not configured');
+    }
+
+    const update = req.body || {};
+    const msg = update.message || update.edited_message;
+    if (!msg || (!msg.text && !msg.caption)) {
+      console.log('No text in update:', JSON.stringify(update).slice(0, 500));
+      return res.status(200).send('OK: no text');
+    }
+
+    const chatId = msg.chat.id;
+    const userText = (msg.text || msg.caption || '').trim();
+
+    console.log(`User ${chatId} wrote: "${userText}"`);
+
+    // если есть активное состояние калькулятора
+    if (userStates[chatId]?.step) {
+      console.log(`User ${chatId} in calc state: ${userStates[chatId].step}`);
+      await handleCalcConversation(chatId, userText);
+      return res.status(200).send('OK');
+    }
+
+    // Команда /start - показываем кнопки
+    if (userText === '/start') {
+      const welcomeText = `Привет! Я бот службы доставки Banderolka/Qwintry 📦
+
+Задайте мне любой вопрос о доставке, или воспользуйтесь меню ниже:`;
+      
+      await sendTgWithKeyboard(chatId, welcomeText, getMainKeyboard());
+      return res.status(200).send('OK');
+    }
+
+    // Кнопка "Калькулятор" - запускаем пошаговый расчёт
+    if (userText === 'Калькулятор' || userText === '📦 Калькулятор' || userText === '/calc') {
+      console.log(`Starting calc for user ${chatId}`);
+      userStates[chatId] = { step: 'hub' };
+      await sendTg(chatId, `📦 *Калькулятор доставки*
+
+Введите код склада отправления:
+• *DE1* - Германия
+• *US1* - США  
+• *UK1* - Великобритания
+
+Например: DE1`);
+      return res.status(200).send('OK');
+    }
+
+    // Кнопка "Помощь"
+    if (userText === 'Помощь' || userText === 'ℹ️ Помощь' || userText === '/help') {
+      const helpText = `ℹ️ *Справка по боту*
+
+Я помогу с вопросами по Banderolka/Qwintry:
+
+• Тарифы и стоимость доставки
+• Сроки доставки по странам
+• Отслеживание посылок
+• Возвраты и страховка
+• Правила и ограничения
+
+Задайте свой вопрос или воспользуйтесь калькулятором для расчёта стоимости.`;
+      
+      await sendTgWithKeyboard(chatId, helpText, getMainKeyboard());
+      return res.status(200).send('OK');
+    }
+
+    // --- всё остальное идёт в Abacus ---
+    console.log(`Sending to Abacus: "${userText}"`);
+    
+    const url = `${APPS_GET_CHAT_URL}?deploymentToken=${encodeURIComponent(ABACUS_DEPLOYMENT_TOKEN)}&deploymentId=${encodeURIComponent(DEPLOYMENT_ID)}`;
+    const body = {
+      messages: [{ is_user: true, text: userText }],
+      conversationId: String(chatId),
+      userId: String(chatId)
     };
-    
-    if (replyMarkup) {
-      payload.reply_markup = replyMarkup;
-    }
-    
-    const response = await axios.post(`${API}/sendMessage`, payload);
-    return response.data;
-  } catch (error) {
-    console.error("Error sending message:", error.response?.data || error.message);
-    throw error;
-  }
-}
 
-// === Главное меню ===
-async function sendMainMenu(chatId) {
-  const text = `📋 *Главное меню:*
-
-Выберите действие из меню ниже или используйте команды:
-• /calc - Калькулятор доставки
-• /help - Справка`;
-
-  const inlineButtons = {
-    inline_keyboard: [
-      [
-        { text: "📦 Калькулятор", callback_data: "menu_calc" },
-        { text: "ℹ️ Помощь", callback_data: "menu_help" }
-      ]
-    ]
-  };
-
-  await sendMessage(chatId, text, inlineButtons);
-}
-
-// === Обработка сообщений ===
-async function handleMessage(msg) {
-  const chatId = msg.chat.id;
-  const text = (msg.text || "").trim();
-  const userId = msg.from.id;
-  const username = msg.from.username || msg.from.first_name || "Unknown";
-
-  console.log(`Message from ${username} (${userId}): ${text}`);
-
-  try {
-    // ВАЖНО: Сначала проверяем команды, потом уже калькулятор
-    if (text === "/start") {
-      // Очищаем сессию при старте
-      delete sessions[chatId];
-      await sendMessage(
-        chatId,
-        "Привет! Я бот службы доставки Banderolka/Qwintry 📦\n\n" +
-          "Задайте мне любой вопрос о доставке, или воспользуйтесь меню ниже:\n\n" +
-          "Команды:\n" +
-          "/calc - Калькулятор доставки\n" +
-          "/help - Справка\n" +
-          "/menu - Показать меню"
-      );
-      await sendMainMenu(chatId);
-      return;
-    }
-    
-    if (text === "/menu") {
-      delete sessions[chatId];
-      await sendMainMenu(chatId);
-      return;
-    }
-    
-    if (text === "/help" || text === "ℹ️ Помощь") {
-      delete sessions[chatId];
-      await sendHelpMessage(chatId);
-      return;
-    }
-    
-    if (text === "/calc" || text === "📦 Калькулятор") {
-      await startCalc(chatId);
-      return;
-    }
-
-    // Только если это НЕ команда - обрабатываем как ввод для калькулятора
-    if (!text.startsWith("/")) {
-      await processUserInput(chatId, text);
-    }
-    
-  } catch (error) {
-    console.error("Error handling message:", error);
-    await sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
-  }
-}
-
-// === Обработка inline-кнопок ===
-async function handleCallback(query) {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-  const userId = query.from.id;
-  const username = query.from.username || query.from.first_name || "Unknown";
-
-  console.log(`Callback from ${username} (${userId}): ${data}`);
-
-  try {
-    // Подтверждаем получение callback
-    await axios.post(`${API}/answerCallbackQuery`, {
-      callback_query_id: query.id,
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
     });
 
-    if (data === "menu_calc") {
-      await startCalc(chatId);
-    } else if (data === "menu_help") {
-      await sendHelpMessage(chatId);
+    const raw = await resp.text();
+    console.log('Abacus response status:', resp.status);
+
+    let botReply = 'Извините, не удалось получить ответ.';
+    if (resp.ok) {
+      try {
+        const data = JSON.parse(raw || '{}');
+
+        // Попробуем извлечь текст из разных возможных полей
+        botReply =
+          data?.responseText ||
+          data?.text ||
+          data?.response ||
+          data?.message ||
+          data?.choices?.[0]?.message?.content ||
+          data?.result?.text ||
+          botReply;
+
+        // Доп. случай: формат {"success": true, "result": {"messages": [{is_user: true, text: "..."}, {is_user: false, text: "..."}]}}
+        if (!data?.responseText && data?.result?.messages?.length) {
+          const lastAssistant = [...data.result.messages].reverse().find(m => m && m.is_user === false && typeof m.text === 'string');
+          if (lastAssistant?.text) botReply = lastAssistant.text;
+        }
+
+        // Небольшая защита на случай пустой строки
+        if (!botReply || typeof botReply !== 'string' || !botReply.trim()) {
+          botReply = 'Извините, не удалось получить ответ.';
+        }
+      } catch (e) {
+        console.error('JSON parse error:', e);
+      }
+    } else {
+      console.error('Abacus non-OK', resp.status, raw.slice(0, 500));
     }
-  } catch (error) {
-    console.error("Error handling callback:", error);
-    await sendMessage(chatId, "⚠️ Произошла ошибка. Попробуйте позже.");
+
+    await sendTgWithKeyboard(chatId, botReply, getMainKeyboard());
+    return res.status(200).send('OK');
+  } catch (e) {
+    console.error('Webhook error:', e);
+    return res.status(200).send('OK');
   }
 }
 
-// === Справка ===
-async function sendHelpMessage(chatId) {
-  const helpText = `ℹ️ *Справка по боту Banderolka/Qwintry*
+// ----------------- helpers -----------------
 
-🚀 *Основные функции:*
-• Расчёт стоимости доставки
-• Информация о сроках доставки
-• Таможенные лимиты и ограничения
+// Пошаговый калькулятор
+async function handleCalcConversation(chatId, text) {
+  const state = userStates[chatId] || {};
 
-📦 *Доступные склады:*
-• США (US1) - Делавэр
-• Германия (DE1) - Франкфурт
-• Великобритания (UK1) - Лондон
+  if (state.step === 'hub') {
+    const hub = text.toUpperCase().trim();
+    if (!['DE1', 'US1', 'UK1'].includes(hub)) {
+      await sendTg(chatId, `❌ Неверный код склада. Используйте:
+• *DE1* - Германия
+• *US1* - США
+• *UK1* - Великобритания
 
-🌍 *Страны доставки:*
-• Россия (RU)
-• Казахстан (KZ)
-• Беларусь (BY)
-• Украина (UA)
-
-💡 *Как пользоваться:*
-1. Нажмите "Калькулятор" или введите /calc
-2. Выберите склад отправления (1-3)
-3. Выберите страну назначения (1-4)
-4. Введите вес посылки в килограммах
-5. Получите расчёт стоимости
-
-🔗 *Полезные ссылки:*
-• Сайт: https://qwintry.com
-• Личный кабинет: https://qwintry.com/login
-• Запрещённые товары: https://qwintry.com/ru/forbidden-goods
-
-❓ *Вопросы?* Обратитесь в службу поддержки через сайт.`;
-
-  await sendMessage(chatId, helpText);
-}
-
-// === Калькулятор ===
-const sessions = {};
-
-async function startCalc(chatId) {
-  sessions[chatId] = { step: "from" };
-  
-  const text = `📦 *Калькулятор доставки*
-
-Выберите склад отправления:
-1️⃣ США (US1)
-2️⃣ Германия (DE1)  
-3️⃣ Великобритания (UK1)
-
-Введите номер (1, 2 или 3):`;
-
-  await sendMessage(chatId, text);
-}
-
-async function processUserInput(chatId, text) {
-  const session = sessions[chatId];
-  if (!session) {
-    // Если нет активной сессии калькулятора, показываем меню
-    await sendMessage(chatId, "Для начала работы выберите действие:");
-    await sendMainMenu(chatId);
-    return;
-  }
-
-  if (session.step === "from") {
-    if (text === "1") session.from = "US1";
-    else if (text === "2") session.from = "DE1";
-    else if (text === "3") session.from = "UK1";
-    else {
-      return sendMessage(chatId, "❌ Введите 1, 2 или 3");
+Попробуйте ещё раз:`);
+      return;
     }
+    state.hub = hub;
+    state.step = 'country';
+    await sendTg(chatId, `✅ Склад: *${hub}*
 
-    session.step = "to";
-    return sendMessage(
-      chatId,
-      `✅ Склад: ${session.from}
+🌍 Введите код страны назначения:
+• *RU* - Россия
+• *KZ* - Казахстан  
+• *BY* - Беларусь
+• *UA* - Украина
 
-🌍 Выберите страну назначения:
-1️⃣ Россия (RU)
-2️⃣ Казахстан (KZ)
-3️⃣ Беларусь (BY)
-4️⃣ Украина (UA)
-
-Введите номер (1, 2, 3 или 4):`
-    );
-  }
-
-  if (session.step === "to") {
-    if (text === "1") session.to = "RU";
-    else if (text === "2") session.to = "KZ";
-    else if (text === "3") session.to = "BY";
-    else if (text === "4") session.to = "UA";
-    else {
-      return sendMessage(chatId, "❌ Введите 1, 2, 3 или 4");
+Например: RU`);
+  } else if (state.step === 'country') {
+    const country = text.toUpperCase().trim();
+    if (country.length !== 2) {
+      await sendTg(chatId, '❌ Введите двухбуквенный код страны (например: RU, KZ, BY, UA)');
+      return;
     }
-
-    session.step = "weight";
-    return sendMessage(
-      chatId,
-      `✅ Маршрут: ${session.from} → ${session.to}
+    state.country = country;
+    state.step = 'weight';
+    await sendTg(chatId, `✅ Маршрут: *${state.hub} → ${country}*
 
 ⚖️ Введите вес посылки в килограммах:
 
-Например: 2.5 или 3`
-    );
+Например: *2.5* или *3*`);
+  } else if (state.step === 'weight') {
+    const weight = parseFloat(text.replace(',', '.'));
+    if (isNaN(weight) || weight <= 0 || weight > 50) {
+      await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: *2.5* или *3*');
+      return;
+    }
+    state.weight = weight.toString();
+    state.step = null; // сброс
+    
+    await sendTg(chatId, '⏳ Рассчитываю стоимость доставки...');
+    await doCalc(chatId, state.hub, state.country, state.weight);
+    delete userStates[chatId];
   }
 
-  if (session.step === "weight") {
-    const weight = parseFloat(text.replace(",", "."));
-    if (isNaN(weight) || weight <= 0) {
-      return sendMessage(chatId, "❌ Введите корректный вес в килограммах (например: 2.5)");
-    }
-    
-    if (weight > 30) {
-      return sendMessage(chatId, "❌ Максимальный вес для расчёта: 30 кг");
-    }
-
-    session.weight = weight;
-    session.step = "done";
-
-    await sendMessage(chatId, "⏳ Рассчитываю стоимость доставки...");
-
-    try {
-      await doCalc(chatId, session.from, session.to, weight);
-    } catch (error) {
-      console.error("Calculation error:", error);
-      await sendMessage(chatId, "⚠️ Ошибка при расчёте. Попробуйте позже или обратитесь в поддержку.");
-    }
-    
-    delete sessions[chatId];
-  }
+  userStates[chatId] = state;
 }
 
-// === Запрос к Qwintry API ===
-async function doCalc(chatId, from, to, weight) {
+// Запрос в API калькулятора Qwintry
+async function doCalc(chatId, hub, country, weight) {
+  const body = {
+    hub: hub,
+    weight: weight.toString(),
+    weightMeasurement: "kg",
+    dimensions: "1x1x1",
+    dimensionsMeasurement: "cm",
+    country: country,
+    city: 4050,
+    zip: "100000",
+    itemsCost: "1",
+    insurance: null,
+    advancedMode: false,
+    source: "calc"
+  };
+
   try {
-    console.log(`Calculating: ${from} → ${to}, weight: ${weight}kg`);
-    
-    const requestData = {
-      hub: from,
-      country: to,
-      weight: weight.toString(),
-      dimensions: "1x1x1",
-      dimensionsMeasurement: "cm",
-      weightMeasurement: "kg",
-      itemsCost: "1",
-      city: to === "RU" ? "4050" : null,
-      zip: to === "RU" ? "100000" : null,
-    };
-
-    console.log("API Request:", JSON.stringify(requestData, null, 2));
-
-    const response = await axios.post("https://qwintry.com/api/calculator-cost", requestData, {
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "TelegramBot/1.0",
-      },
-      timeout: 15000,
+    const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
     });
 
-    console.log("API Response received successfully");
+    const data = await resp.json();
+    console.log('Qwintry calc response received');
 
-    if (!response.data || !response.data.costs) {
-      throw new Error("Invalid API response structure");
-    }
+    if (data?.costs && Object.keys(data.costs).length > 0) {
+      let reply = `📦 *Стоимость доставки*\n`;
+      reply += `📍 Маршрут: *${hub} → ${country}*\n`;
+      reply += `⚖️ Вес: *${weight} кг*\n\n`;
 
-    await formatAndSendResults(chatId, response.data, from, to, weight);
+      const methods = Object.entries(data.costs);
+      methods.forEach(([method, details], index) => {
+        const label = details?.cost?.label || method;
+        const price = details?.cost?.costWithDiscount || details?.cost?.shippingCost || 0;
+        const total = details?.cost?.totalCostWithDiscount || details?.cost?.totalCost || 0;
+        const days = details?.days || '?';
 
-  } catch (error) {
-    console.error("Calculation error:", error.response?.data || error.message);
-    
-    if (error.code === "ECONNABORTED") {
-      await sendMessage(chatId, "⚠️ Превышено время ожидания ответа от сервера. Попробуйте позже.");
-    } else if (error.response?.status === 429) {
-      await sendMessage(chatId, "⚠️ Слишком много запросов. Подождите немного и попробуйте снова.");
-    } else if (error.response?.status >= 500) {
-      await sendMessage(chatId, "⚠️ Сервер временно недоступен. Попробуйте позже.");
+        reply += `${index + 1}. *${label}*\n`;
+        reply += `💰 Доставка: $${price}\n`;
+        reply += `💳 Итого: $${total}\n`;
+        reply += `⏰ Срок: ${days}\n\n`;
+      });
+
+      reply += `ℹ️ Цены указаны в долларах США\n`;
+      reply += `📱 Для нового расчёта используйте меню ниже`;
+
+      await sendTgWithKeyboard(chatId, reply.trim(), getMainKeyboard());
     } else {
-      await sendMessage(chatId, "⚠️ Ошибка при расчёте стоимости. Проверьте данные и попробуйте снова.");
+      await sendTgWithKeyboard(chatId, 
+        `❌ Не удалось рассчитать доставку для указанных параметров.
+
+*Возможные причины:*
+• Неподдерживаемый маршрут
+• Превышен лимит веса  
+• Временные технические проблемы
+
+Попробуйте другие параметры или обратитесь в поддержку.`,
+        getMainKeyboard()
+      );
     }
+  } catch (err) {
+    console.error('Calc error', err);
+    await sendTgWithKeyboard(chatId, 
+      '❌ Произошла ошибка при расчёте доставки.\n\nПопробуйте позже или обратитесь в поддержку.',
+      getMainKeyboard()
+    );
   }
 }
 
-// === Форматирование результатов ===
-async function formatAndSendResults(chatId, data, from, to, weight) {
+// Отправка текста
+async function sendTg(chatId, text) {
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  
   try {
-    let message = `📦 *Стоимость доставки*\n`;
-    message += `📍 Маршрут: ${from} → ${to}\n`;
-    message += `⚖️ Вес: ${weight} кг\n\n`;
-
-    const costs = data.costs || {};
-    let methodCount = 1;
-
-    // Обрабатываем каждый метод доставки
-    for (const [methodKey, methodData] of Object.entries(costs)) {
-      if (!methodData || !methodData.cost) continue;
-
-      const cost = methodData.cost;
-      const label = cost.label || methodKey;
-      const shippingCost = cost.shippingCost || cost.costWithDiscount || 0;
-      const totalCost = cost.totalCost || cost.totalCostWithDiscount || 0;
-      const days = methodData.days || "Уточняется";
-      
-      // Очищаем описание от HTML тегов
-      let description = methodData.description || "";
-      description = description.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
-      if (description.length > 80) {
-        description = description.substring(0, 80) + "...";
-      }
-
-      message += `${methodCount}. *${label}*\n`;
-      message += `💰 Доставка: $${shippingCost}\n`;
-      message += `💳 Итого: $${totalCost.toFixed(2)}\n`;
-      message += `⏰ Срок: ${days}\n`;
-      if (description) {
-        message += `ℹ️ ${description}\n`;
-      }
-      message += `\n`;
-      
-      methodCount++;
+    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        chat_id: chatId, 
+        text, 
+        parse_mode: 'Markdown' 
+      })
+    });
+    
+    const result = await resp.text();
+    if (!resp.ok) {
+      console.error('Telegram sendMessage error', resp.status, result.slice(0, 300));
     }
-
-    // Добавляем информацию о таможне
-    if (data.country_info && data.country_info.customs_limit) {
-      message += `---\n`;
-      message += `ℹ️ *Таможня:* ${data.country_info.customs_limit}\n`;
-    }
-
-    // Добавляем информацию о хранении
-    if (data.hubData && data.hubData.storage) {
-      const storage = data.hubData.storage;
-      message += `📦 *Склад ${data.hubData.hub}:* бесплатное хранение ${storage.freeStorageDays} дней`;
-      if (storage.subscriberFreeStorageDays && storage.subscriberFreeStorageDays > storage.freeStorageDays) {
-        message += ` (до ${storage.subscriberFreeStorageDays} для подписчиков)`;
-      }
-      message += `\n`;
-    }
-
-    // Добавляем количество пунктов выдачи
-    if (data.pickup_points) {
-      message += `📍 Доступно пунктов выдачи: ${data.pickup_points}`;
-    }
-
-    await sendMessage(chatId, message);
-
-    // Предлагаем новый расчёт
-    const newCalcButton = {
-      inline_keyboard: [
-        [{ text: "🔄 Новый расчёт", callback_data: "menu_calc" }]
-      ]
-    };
-
-    await sendMessage(chatId, "Хотите сделать ещё один расчёт?", newCalcButton);
-
+    return result;
   } catch (error) {
-    console.error("Error formatting results:", error);
-    await sendMessage(chatId, "⚠️ Ошибка при обработке результатов.");
+    console.error('sendTg error:', error);
+    return null;
   }
+}
+
+// Отправка текста с кнопками
+async function sendTgWithKeyboard(chatId, text, keyboard) {
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  
+  try {
+    const payload = {
+      chat_id: chatId,
+      text: text,
+      parse_mode: 'Markdown',
+      reply_markup: keyboard
+    };
+    
+    console.log('Sending keyboard:', JSON.stringify(keyboard));
+    
+    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    
+    const result = await resp.text();
+    if (!resp.ok) {
+      console.error('Telegram sendMessage (keyboard) error', resp.status, result.slice(0, 300));
+    } else {
+      console.log('Keyboard sent successfully');
+    }
+    return result;
+  } catch (error) {
+    console.error('sendTgWithKeyboard error:', error);
+    return null;
+  }
+}
+
+// Главное меню с кнопками
+function getMainKeyboard() {
+  return {
+    keyboard: [
+      [
+        { text: "Калькулятор" },
+        { text: "Помощь" }
+      ]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: false,
+    persistent: true
+  };
 }
