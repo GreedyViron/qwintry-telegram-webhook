@@ -419,7 +419,7 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
 
   let costs = Object.entries(data.costs);
 
-  // 🔑 фильтрация для EU/UK/ES — оставляем только ecopost
+  // 🔑 фильтрация только ecopost для EU/UK/ES
   if (["DE", "UK", "ES"].includes(warehouseCode)) {
     costs = costs.filter(([key]) => key === "ecopost");
   }
@@ -427,39 +427,40 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
   let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n`;
   message += `⚖️ Вес: ${weight} кг\n\n`;
 
-  // Сортируем тарифы по цене (от дешевого к дорогому)
-  const sortedTariffs = costs
-    .map(([key, option]) => ({
-      key,
-      option,
-      price: option.cost?.totalCostWithDiscount || option.cost?.totalCost || 0
-    }))
-    .sort((a, b) => a.price - b.price);
-
-  for (const { key, option } of sortedTariffs) {
-    if (!option?.cost) continue;
+  costs.forEach(([key, option]) => {
+    if (!option?.cost) return;
 
     const emoji = TARIFF_EMOJIS[key] || '📦';
     const label = option.cost.label || key;
-    const price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+
+    let price;
+    if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
+      // ⚡ Пересчёт по формуле сайта (без страховки)
+      const shipping = option.cost.shippingCost || 0;
+      const packing = option.cost.packingCost || 7;
+      const fee = option.cost.gatewayFee || 0;
+      price = +(shipping + packing + fee).toFixed(2);
+    } else {
+      // Для US / CN оставляем как есть
+      price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+    }
+
     const currency = option.cost.currency || '$';
     const days = option.days || '—';
 
     message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
+  });
+
+  // Подсказка для EU
+  if (["DE", "UK", "ES"].includes(warehouseCode)) {
+    message += `\n💡 *Страховка $3 считается отдельно (опция сайта)*`;
   }
 
-  // Добавляем информацию о составе цены для EU складов
-  if (["DE", "UK", "ES"].includes(warehouseCode) && sortedTariffs.length > 0) {
-    message += `\n💡 **Состав:** доставка + обработка $10 + комиссия ~3%`;
-  }
-
-  // Добавляем информацию о таможне
   if (data.country_info?.customs_limit) {
     message += `\n💡 **Таможня:** ${data.country_info.customs_limit}`;
   }
 
   message += `\n\n🔗 [Подробнее на сайте](https://qwintry.com/ru/calculator)`;
-
   return message;
 }
 
