@@ -331,28 +331,33 @@ async function handleWeightInput(chatId, userId, weightText) {
   const result = await calculateDelivery(weight, userState.countryId, userState.cityId, userState.warehouse);
 
   if (result.success) {
-    const formattedResult = formatDeliveryResult(
-  result.data,
-  userState.warehouseName,
-  userState.countryName,
-  userState.cityName,
-  weight,
-  userState.warehouse  // ← добавь этот параметр!
-);
-    await sendMessage(chatId, formattedResult);
-  } else {
-    await sendMessage(chatId, `❌ Не удалось рассчитать доставку для этого маршрута.\n\nВозможные причины:\n• Маршрут временно недоступен\n• Превышен лимит по весу\n• Техническая ошибка\n\nОшибка: ${result.error}`);
-  }
+  // Логируем весь ответ от API для анализа
+  console.log("=== DEBUG EcoPost ===");
+  console.log(JSON.stringify(result.data, null, 2));
 
-  // Предлагаем новый расчет
-  const keyboard = {
-    inline_keyboard: [
-      [{ text: '🔄 Новый расчет', callback_data: 'calculator' }],
-      [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
-    ]
-  };
+  const formattedResult = formatDeliveryResult(
+    result.data,
+    userState.warehouseName,
+    userState.countryName,
+    userState.cityName,
+    weight,
+    userState.warehouse  // ← добавлен новый параметр!
+  );
 
-  await sendMessage(chatId, "Хотите сделать еще один расчет?", keyboard);
+  await sendMessage(chatId, formattedResult);
+} else {
+  await sendMessage(chatId, `❌ Не удалось рассчитать доставку для этого маршрута.\n\nВозможные причины:\n• Маршрут временно недоступен\n• Превышен лимит по весу\n• Техническая ошибка\n\nОшибка: ${result.error}`);
+}
+
+// Предлагаем новый расчет
+const keyboard = {
+  inline_keyboard: [
+    [{ text: '🔄 Новый расчет', callback_data: 'calculator' }],
+    [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
+  ]
+};
+
+await sendMessage(chatId, "Хотите сделать еще один расчет?", keyboard);
 
   // Очищаем состояние
   userStates.delete(userId);
