@@ -37,7 +37,7 @@ const userStates = new Map();
 // Данные складов
 const WAREHOUSES = {
   US: { name: 'США', code: 'US1', flag: '🇺🇸' },
-  DE: { name: 'Германия', code: 'DE1', flag: '🇩🇪' },
+  DE: { name: 'Германия', code: 'EU1', flag: '🇩🇪' },  // ← изменил DE1 на EU1
   UK: { name: 'Великобритания', code: 'UK1', flag: '🇬🇧' },
   CN: { name: 'Китай', code: 'CN1', flag: '🇨🇳' },
   ES: { name: 'Испания', code: 'ES1', flag: '🇪🇸' }
