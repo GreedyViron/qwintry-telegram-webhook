@@ -16,19 +16,66 @@ const WAREHOUSES = {
   '5': { code: 'ES1', name: 'Испания' }
 };
 
-// Маппинг популярных стран для быстрого поиска
-const COUNTRY_ALIASES = {
-  'россия': ['russia', 'ru', 'russian federation'],
-  'казахстан': ['kazakhstan', 'kz'],
-  'беларусь': ['belarus', 'by', 'белоруссия'],
-  'украина': ['ukraine', 'ua'],
-  'германия': ['germany', 'de', 'deutschland'],
-  'австралия': ['australia', 'au'],
-  'китай': ['china', 'cn'],
-  'испания': ['spain', 'es'],
-  'великобритания': ['united kingdom', 'uk', 'gb', 'britain'],
-  'сша': ['united states', 'us', 'usa', 'america']
+// Алиасы популярных стран: ключи — русские и английские варианты, значения — ISO-код
+const COUNTRY_ALIAS_TO_CODE = {
+  'россия': 'RU',
+  'russia': 'RU',
+  'ru': 'RU',
+  'russian federation': 'RU',
+
+  'казахстан': 'KZ',
+  'kazakhstan': 'KZ',
+  'kz': 'KZ',
+
+  'беларусь': 'BY',
+  'белоруссия': 'BY',
+  'belarus': 'BY',
+  'by': 'BY',
+
+  'украина': 'UA',
+  'ukraine': 'UA',
+  'ua': 'UA',
+
+  'германия': 'DE',
+  'germany': 'DE',
+  'deutschland': 'DE',
+  'de': 'DE',
+
+  'сша': 'US',
+  'united states': 'US',
+  'usa': 'US',
+  'us': 'US',
+  'america': 'US',
+  'united states of america': 'US',
+
+  'китай': 'CN',
+  'china': 'CN',
+  'cn': 'CN',
+
+  'испания': 'ES',
+  'spain': 'ES',
+  'es': 'ES',
+
+  'великобритания': 'GB',
+  'united kingdom': 'GB',
+  'great britain': 'GB',
+  'britain': 'GB',
+  'uk': 'GB',
+  'gb': 'GB',
+  'england': 'GB',
+  'scotland': 'GB',
+  'wales': 'GB',
+  'northern ireland': 'GB',
+
+  'австралия': 'AU',
+  'australia': 'AU',
+  'au': 'AU'
 };
+
+// Простейший кэш стран на время жизни функции (serverless warm)
+let COUNTRY_CACHE = null;
+let COUNTRY_CACHE_TS = 0;
+const COUNTRY_CACHE_TTL_MS = 10 * 60 * 1000; // 10 минут
 
 export default async function handler(req, res) {
   try {
@@ -88,8 +135,6 @@ export default async function handler(req, res) {
       userId: String(chatId)
     };
 
-    console.log('Calling Abacus URL:', url);
-
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -97,14 +142,10 @@ export default async function handler(req, res) {
     });
 
     const raw = await resp.text();
-    console.log('Abacus status:', resp.status, raw.slice(0, 400));
-
     let botReply = 'Извините, не удалось получить ответ.';
     if (resp.ok) {
       try {
         const data = JSON.parse(raw || '{}');
-
-        // Попробуем извлечь текст из разных возможных полей
         botReply =
           data?.responseText ||
           data?.text ||
@@ -114,13 +155,11 @@ export default async function handler(req, res) {
           data?.result?.text ||
           botReply;
 
-        // Доп. случай: формат {"success": true, "result": {"messages": [{is_user: true, text: "..."}, {is_user: false, text: "..."}]}}
         if (!data?.responseText && data?.result?.messages?.length) {
           const lastAssistant = [...data.result.messages].reverse().find(m => m && m.is_user === false && typeof m.text === 'string');
           if (lastAssistant?.text) botReply = lastAssistant.text;
         }
 
-        // Небольшая защита на случай пустой строки
         if (!botReply || typeof botReply !== 'string' || !botReply.trim()) {
           botReply = 'Извините, не удалось получить ответ.';
         }
@@ -159,7 +198,6 @@ async function handleCalcConversation(chatId, text) {
 Попробуйте ещё раз:`);
       return;
     }
-    
     state.warehouse = WAREHOUSES[warehouseNum];
     state.step = 'country';
     await sendTg(chatId, `✅ Склад: ${state.warehouse.name}
@@ -170,25 +208,24 @@ async function handleCalcConversation(chatId, text) {
 • По-русски: Россия, Казахстан, Беларусь
 • По-английски: Russia, Kazakhstan, Belarus  
 • Код страны: RU, KZ, BY
+• Можно даже ID (например, 236 для России)
 
 Напишите страну:`);
-
   } else if (state.step === 'country') {
-    const countryName = text.trim();
-    if (countryName.length < 2) {
-      await sendTg(chatId, '❌ Введите название страны или код (например: Россия, Russia, RU)');
+    const countryInput = text.trim();
+    if (countryInput.length < 2) {
+      await sendTg(chatId, '❌ Введите название страны / код / ID (например: Россия, Russia, RU или 236)');
       return;
     }
-    
+
     await sendTg(chatId, '🔍 Ищу страну в базе данных...');
-    
-    // Поиск страны через API
-    const countryData = await findCountry(countryName);
+
+    const countryData = await findCountry(countryInput);
     if (!countryData) {
-      await sendTg(chatId, `❌ Страна "${countryName}" не найдена в базе Qwintry.
+      await sendTg(chatId, `❌ Страна "${countryInput}" не найдена в базе Qwintry.
 
 Попробуйте:
-• Россия / Russia / RU
+• Россия / Russia / RU / 236
 • Казахстан / Kazakhstan / KZ  
 • Беларусь / Belarus / BY
 • Украина / Ukraine / UA
@@ -197,7 +234,7 @@ async function handleCalcConversation(chatId, text) {
 Введите название ещё раз:`);
       return;
     }
-    
+
     state.country = countryData;
     state.step = 'city';
     await sendTg(chatId, `✅ Страна: ${countryData.name}
@@ -207,17 +244,15 @@ async function handleCalcConversation(chatId, text) {
 Например: Москва, Алматы, Минск, Киев, Берлин и т.д.
 
 Напишите название города:`);
-
   } else if (state.step === 'city') {
     const cityName = text.trim();
     if (cityName.length < 2) {
       await sendTg(chatId, '❌ Введите название города (например: Москва, Алматы, Минск)');
       return;
     }
-    
+
     await sendTg(chatId, '🔍 Ищу город в базе данных...');
-    
-    // Поиск города через API
+
     const cityData = await findCity(state.country.id, cityName);
     if (!cityData) {
       await sendTg(chatId, `❌ Город "${cityName}" не найден в стране ${state.country.name}.
@@ -230,7 +265,7 @@ async function handleCalcConversation(chatId, text) {
 Введите название города ещё раз:`);
       return;
     }
-    
+
     state.city = cityData;
     state.step = 'weight';
     await sendTg(chatId, `✅ Направление: ${state.warehouse.name} → ${state.country.name}, ${cityData.name}
@@ -240,17 +275,16 @@ async function handleCalcConversation(chatId, text) {
 Например: 2.5 или 3 или 0.5
 
 Введите вес:`);
-
   } else if (state.step === 'weight') {
     const weight = parseFloat(text.replace(',', '.'));
     if (isNaN(weight) || weight <= 0 || weight > 50) {
       await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: 2.5 или 3');
       return;
     }
-    
+
     state.weight = weight.toString();
-    state.step = null; // сброс
-    
+    state.step = null; // сброс состояния
+
     await sendTg(chatId, '⏳ Рассчитываю стоимость доставки...');
     await doCalc(chatId, state.warehouse.code, state.country.id, state.city.id, state.weight, state.country.name, state.city.name);
     delete userStates[chatId];
@@ -259,132 +293,152 @@ async function handleCalcConversation(chatId, text) {
   userStates[chatId] = state;
 }
 
-// Поиск страны через API Qwintry с универсальным поиском
-async function findCountry(searchTerm) {
+// utils: нормализация строки
+function norm(s) {
+  return String(s || '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+// Получение списка стран (с кэшем)
+async function getCountries() {
+  const now = Date.now();
+  if (COUNTRY_CACHE && (now - COUNTRY_CACHE_TS) < COUNTRY_CACHE_TTL_MS) {
+    return COUNTRY_CACHE;
+  }
   try {
-    const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/countries", {
-      method: "GET",
-      headers: { "Content-Type": "application/json" }
+    const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/countries', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
     });
-    
     if (!resp.ok) {
       console.error('Countries API failed:', resp.status);
       return null;
     }
-    
-    const countries = await resp.json();
-    if (!Array.isArray(countries)) {
-      console.error('Countries API returned non-array:', typeof countries);
+    const list = await resp.json();
+    if (!Array.isArray(list)) {
+      console.error('Countries API returned non-array');
       return null;
     }
-    
-    console.log(`Searching for country: "${searchTerm}" in ${countries.length} countries`);
-    
-    const searchLower = searchTerm.toLowerCase().trim();
-    
-    // Поиск по всем возможным полям
-    const found = countries.find(country => {
-      if (!country || typeof country !== 'object') return false;
-      
-      // Проверяем все возможные поля названия
-      const fields = [
-        country.name,
-        country.name_en,
-        country.name_ru,
-        country.title,
-        country.title_en,
-        country.title_ru,
-        country.code,
-        country.alpha2,
-        country.iso,
-        country.country_code
-      ];
-      
-      return fields.some(field => {
-        if (!field || typeof field !== 'string') return false;
-        const fieldLower = field.toLowerCase();
-        
-        // Точное совпадение
-        if (fieldLower === searchLower) return true;
-        
-        // Поиск по вхождению
-        if (fieldLower.includes(searchLower) || searchLower.includes(fieldLower)) return true;
-        
-        return false;
-      });
-    });
-    
-    if (found) {
-      const displayName = found.name || found.name_ru || found.name_en || found.title || searchTerm;
-      console.log(`Found country: ${displayName} (ID: ${found.id})`);
-      return { id: found.id, name: displayName };
-    }
-    
-    // Если не найдено через API, попробуем через алиасы
-    for (const [ruName, aliases] of Object.entries(COUNTRY_ALIASES)) {
-      if (ruName === searchLower || aliases.some(alias => alias === searchLower)) {
-        // Ищем в списке стран по алиасам
-        const foundByAlias = countries.find(country => {
-          const fields = [
-            country.name,
-            country.name_en,
-            country.name_ru,
-            country.code,
-            country.alpha2
-          ];
-          
-          return fields.some(field => {
-            if (!field) return false;
-            const fieldLower = field.toLowerCase();
-            return aliases.some(alias => fieldLower.includes(alias) || alias.includes(fieldLower));
-          });
-        });
-        
-        if (foundByAlias) {
-          const displayName = foundByAlias.name || foundByAlias.name_ru || foundByAlias.name_en || ruName;
-          console.log(`Found country by alias: ${displayName} (ID: ${foundByAlias.id})`);
-          return { id: foundByAlias.id, name: displayName };
-        }
-      }
-    }
-    
-    console.log(`Country not found: "${searchTerm}"`);
-    return null;
-    
+    COUNTRY_CACHE = list;
+    COUNTRY_CACHE_TS = now;
+    console.log(`Loaded countries: ${list.length}`);
+    return list;
   } catch (e) {
-    console.error('Country search error:', e);
+    console.error('Countries fetch error:', e);
     return null;
   }
+}
+
+// Поиск страны: поддержка рус/англ, ISO, частичных, числового ID
+async function findCountry(input) {
+  const countries = await getCountries();
+  if (!countries || countries.length === 0) return null;
+
+  const inputRaw = String(input).trim();
+  const inputLower = norm(inputRaw);
+
+  // 1) Если ввели числовой ID
+  if (/^\d+$/.test(inputLower)) {
+    const idNum = parseInt(inputLower, 10);
+    const byId = countries.find(c => Number(c?.id) === idNum);
+    if (byId) {
+      const name = byId.name || byId.name_en || byId.name_ru || byId.title || `#${byId.id}`;
+      console.log(`Found country by numeric id: ${name} (${byId.id})`);
+      return { id: byId.id, name };
+    }
+  }
+
+  // 2) Алиасы: RU/Россия/Russia/... -> ISO-код
+  const isoFromAlias = COUNTRY_ALIAS_TO_CODE[inputLower];
+  if (isoFromAlias) {
+    // ищем страну по коду
+    const byCode = countries.find(c => {
+      const code = (c.code || c.alpha2 || c.iso || c.country_code || '').toUpperCase();
+      return code === isoFromAlias;
+    });
+    if (byCode) {
+      const name = byCode.name || byCode.name_en || byCode.name_ru || byCode.title || isoFromAlias;
+      console.log(`Found country by alias ${inputRaw} → ${isoFromAlias} → ${name} (${byCode.id})`);
+      return { id: byCode.id, name };
+    }
+  }
+
+  // 3) Прямое точное совпадение по коду (если ввели RU/KZ/...)
+  if (/^[A-Za-z]{2}$/.test(inputRaw)) {
+    const isoUpper = inputRaw.toUpperCase();
+    const byCode = countries.find(c => {
+      const code = (c.code || c.alpha2 || c.iso || c.country_code || '').toUpperCase();
+      return code === isoUpper;
+    });
+    if (byCode) {
+      const name = byCode.name || byCode.name_en || byCode.name_ru || byCode.title || isoUpper;
+      console.log(`Found country by ISO code ${isoUpper}: ${name} (${byCode.id})`);
+      return { id: byCode.id, name };
+    }
+  }
+
+  // 4) Поиск по названиям: name/name_en/name_ru/title
+  const byNameExact = countries.find(c => {
+    const fields = [
+      c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
+    ].filter(Boolean).map(norm);
+    return fields.includes(inputLower);
+  });
+  if (byNameExact) {
+    const name = byNameExact.name || byNameExact.name_en || byNameExact.name_ru || byNameExact.title || inputRaw;
+    console.log(`Found country by exact name: ${name} (${byNameExact.id})`);
+    return { id: byNameExact.id, name };
+  }
+
+  // 5) Частичное совпадение (вхождение)
+  const byNamePartial = countries.find(c => {
+    const fields = [
+      c.name, c.name_en, c.name_ru, c.title, c.title_en, c.title_ru
+    ].filter(Boolean).map(norm);
+    return fields.some(f => f.includes(inputLower) || inputLower.includes(f));
+  });
+  if (byNamePartial) {
+    const name = byNamePartial.name || byNamePartial.name_en || byNamePartial.name_ru || byNamePartial.title || inputRaw;
+    console.log(`Found country by partial: ${name} (${byNamePartial.id})`);
+    return { id: byNamePartial.id, name };
+  }
+
+  console.log(`Country not found for input: "${inputRaw}"`);
+  return null;
 }
 
 // Поиск города через API Qwintry
 async function findCity(countryId, cityName) {
   try {
-    const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/cities", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/cities', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         country: countryId,
         query: cityName
       })
     });
-    
+
     if (!resp.ok) {
       console.error('Cities API failed:', resp.status);
       return null;
     }
-    
+
     const cities = await resp.json();
     if (!Array.isArray(cities) || cities.length === 0) {
       console.log(`No cities found for "${cityName}" in country ${countryId}`);
       return null;
     }
-    
-    // Берём первый найденный город
-    const city = cities[0];
-    console.log(`Found city: ${city.name} (ID: ${city.id}) in country ${countryId}`);
-    return { id: city.id, name: city.name };
-    
+
+    // Предпочтительно точное совпадение по названию (без учета регистра), иначе первый
+    const cityNorm = norm(cityName);
+    const exact = cities.find(c => norm(c.name) === cityNorm) || cities[0];
+
+    console.log(`Found city: ${exact.name} (ID: ${exact.id}) in country ${countryId}`);
+    return { id: exact.id, name: exact.name };
+
   } catch (e) {
     console.error('City search error:', e);
     return null;
@@ -396,29 +450,26 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
   const body = {
     hub: hub,
     weight: weight.toString(),
-    weightMeasurement: "kg",
-    dimensions: "1x1x1",
-    dimensionsMeasurement: "cm",
+    weightMeasurement: 'kg',
+    dimensions: '1x1x1',
+    dimensionsMeasurement: 'cm',
     country: countryId,
     city: cityId,
-    zip: "100000",
-    itemsCost: "1",
+    zip: '100000',
+    itemsCost: '1',
     insurance: null,
     advancedMode: false,
-    source: "calc"
+    source: 'calc'
   };
 
   try {
-    console.log('Sending calc request:', JSON.stringify(body));
-    
-    const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/calculate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
     });
 
     const data = await resp.json();
-    console.log('Qwintry calc response received, costs count:', Object.keys(data?.costs || {}).length);
 
     if (data?.costs && Object.keys(data.costs).length > 0) {
       let reply = `📦 Стоимость доставки\n`;
@@ -443,8 +494,8 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
 
       await sendTg(chatId, reply.trim());
     } else {
-      await sendTg(chatId, 
-        `❌ Не удалось рассчитать доставку для маршрута ${hub} → ${countryName}, ${cityName}
+      await sendTg(chatId,
+`❌ Не удалось рассчитать доставку для маршрута ${hub} → ${countryName}, ${cityName}
 
 Возможные причины:
 • Данный маршрут временно недоступен
@@ -459,7 +510,7 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
     }
   } catch (err) {
     console.error('Calc error', err);
-    await sendTg(chatId, 
+    await sendTg(chatId,
       `❌ Произошла ошибка при расчёте доставки.
 
 Попробуйте позже или воспользуйтесь официальным калькулятором:
@@ -471,14 +522,19 @@ https://qwintry.com/ru/calculator/ru`
 // Отправка текста
 async function sendTg(chatId, text) {
   const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-  const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text })
-  });
-  const raw = await resp.text();
-  if (!resp.ok) {
-    console.error('Telegram sendMessage error', resp.status, raw.slice(0, 300));
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text })
+    });
+    const raw = await resp.text();
+    if (!resp.ok) {
+      console.error('Telegram sendMessage error', resp.status, raw.slice(0, 300));
+    }
+    return raw;
+  } catch (e) {
+    console.error('sendTg error:', e);
+    return null;
   }
-  return raw;
 }
