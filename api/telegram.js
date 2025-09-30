@@ -433,16 +433,14 @@ costs.forEach(([key, option]) => {
     const emoji = TARIFF_EMOJIS[key] || '📦';
     const label = option.cost.label || key;
 
-    let price;
     if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
-      const shipping = option.cost.shippingCost || 0;
-      const fee = option.cost.gatewayFee || 0;
-      const packing = 3.5; // правильная стоимость упаковки
-      price = +(shipping + packing + fee).toFixed(2);
-    } else {
-      // Для US / CN оставляем как есть
-      price = option.cost.totalCostWithDiscount || option.cost.totalCost;
-    }
+  const shipping = option.cost.costWithDiscount || option.cost.shippingCost || 0;  // правильное поле
+  const fee = option.cost.gatewayFee || 0;
+  const packing = 3.5; // фикс для EcoPost
+  price = +(shipping + fee + packing).toFixed(2);
+} else {
+  price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+}
 
     const currency = option.cost.currency || '$';
     const days = option.days || '—';
