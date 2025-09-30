@@ -437,9 +437,10 @@ costs.forEach(([key, option]) => {
 
   if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
     const shipping = option.cost.costWithDiscount || option.cost.shippingCost || 0;
-    const fee = option.cost.gatewayFee || 0;
+    const fee = 0.31; // фиксированная комиссия для EcoPost (как на сайте)
     const packing = 3.5; // фикс для EcoPost
     price = +(shipping + fee + packing).toFixed(2);
+    console.log(`🔧 EcoPost расчет: shipping=${shipping}, fee=${fee}, packing=${packing}, итого=${price}`);
   } else {
     price = option.cost.totalCostWithDiscount || option.cost.totalCost;
   }
