@@ -16,6 +16,20 @@ const WAREHOUSES = {
   '5': { code: 'ES1', name: 'Испания' }
 };
 
+// Маппинг популярных стран для быстрого поиска
+const COUNTRY_ALIASES = {
+  'россия': ['russia', 'ru', 'russian federation'],
+  'казахстан': ['kazakhstan', 'kz'],
+  'беларусь': ['belarus', 'by', 'белоруссия'],
+  'украина': ['ukraine', 'ua'],
+  'германия': ['germany', 'de', 'deutschland'],
+  'австралия': ['australia', 'au'],
+  'китай': ['china', 'cn'],
+  'испания': ['spain', 'es'],
+  'великобритания': ['united kingdom', 'uk', 'gb', 'britain'],
+  'сша': ['united states', 'us', 'usa', 'america']
+};
+
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') {
@@ -152,14 +166,17 @@ async function handleCalcConversation(chatId, text) {
 
 🌍 Введите название страны назначения:
 
-Например: Россия, Казахстан, Беларусь, Украина, Австралия, Германия и т.д.
+Можно писать:
+• По-русски: Россия, Казахстан, Беларусь
+• По-английски: Russia, Kazakhstan, Belarus  
+• Код страны: RU, KZ, BY
 
-Напишите полное название страны:`);
+Напишите страну:`);
 
   } else if (state.step === 'country') {
     const countryName = text.trim();
     if (countryName.length < 2) {
-      await sendTg(chatId, '❌ Введите полное название страны (например: Россия, Казахстан, Беларусь)');
+      await sendTg(chatId, '❌ Введите название страны или код (например: Россия, Russia, RU)');
       return;
     }
     
@@ -171,12 +188,11 @@ async function handleCalcConversation(chatId, text) {
       await sendTg(chatId, `❌ Страна "${countryName}" не найдена в базе Qwintry.
 
 Попробуйте:
-• Россия
-• Казахстан  
-• Беларусь
-• Украина
-• Германия
-• Австралия
+• Россия / Russia / RU
+• Казахстан / Kazakhstan / KZ  
+• Беларусь / Belarus / BY
+• Украина / Ukraine / UA
+• Германия / Germany / DE
 
 Введите название ещё раз:`);
       return;
@@ -188,7 +204,7 @@ async function handleCalcConversation(chatId, text) {
 
 🏙️ Введите название города назначения:
 
-Например: Москва, Алматы, Минск, Киев и т.д.
+Например: Москва, Алматы, Минск, Киев, Берлин и т.д.
 
 Напишите название города:`);
 
@@ -206,7 +222,10 @@ async function handleCalcConversation(chatId, text) {
     if (!cityData) {
       await sendTg(chatId, `❌ Город "${cityName}" не найден в стране ${state.country.name}.
 
-Попробуйте ввести другое название города или проверьте правильность написания.
+Попробуйте:
+• Проверить правильность написания
+• Ввести название на английском языке
+• Выбрать крупный город в этой стране
 
 Введите название города ещё раз:`);
       return;
@@ -240,31 +259,98 @@ async function handleCalcConversation(chatId, text) {
   userStates[chatId] = state;
 }
 
-// Поиск страны через API Qwintry
-async function findCountry(countryName) {
+// Поиск страны через API Qwintry с универсальным поиском
+async function findCountry(searchTerm) {
   try {
     const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/countries", {
       method: "GET",
       headers: { "Content-Type": "application/json" }
     });
     
-    if (!resp.ok) return null;
-    
-    const countries = await resp.json();
-    if (!Array.isArray(countries)) return null;
-    
-    // Ищем страну по названию (нечувствительно к регистру)
-    const searchName = countryName.toLowerCase();
-    const found = countries.find(country => 
-      country.name && country.name.toLowerCase().includes(searchName)
-    );
-    
-    if (found) {
-      console.log(`Found country: ${found.name} (ID: ${found.id})`);
-      return { id: found.id, name: found.name };
+    if (!resp.ok) {
+      console.error('Countries API failed:', resp.status);
+      return null;
     }
     
+    const countries = await resp.json();
+    if (!Array.isArray(countries)) {
+      console.error('Countries API returned non-array:', typeof countries);
+      return null;
+    }
+    
+    console.log(`Searching for country: "${searchTerm}" in ${countries.length} countries`);
+    
+    const searchLower = searchTerm.toLowerCase().trim();
+    
+    // Поиск по всем возможным полям
+    const found = countries.find(country => {
+      if (!country || typeof country !== 'object') return false;
+      
+      // Проверяем все возможные поля названия
+      const fields = [
+        country.name,
+        country.name_en,
+        country.name_ru,
+        country.title,
+        country.title_en,
+        country.title_ru,
+        country.code,
+        country.alpha2,
+        country.iso,
+        country.country_code
+      ];
+      
+      return fields.some(field => {
+        if (!field || typeof field !== 'string') return false;
+        const fieldLower = field.toLowerCase();
+        
+        // Точное совпадение
+        if (fieldLower === searchLower) return true;
+        
+        // Поиск по вхождению
+        if (fieldLower.includes(searchLower) || searchLower.includes(fieldLower)) return true;
+        
+        return false;
+      });
+    });
+    
+    if (found) {
+      const displayName = found.name || found.name_ru || found.name_en || found.title || searchTerm;
+      console.log(`Found country: ${displayName} (ID: ${found.id})`);
+      return { id: found.id, name: displayName };
+    }
+    
+    // Если не найдено через API, попробуем через алиасы
+    for (const [ruName, aliases] of Object.entries(COUNTRY_ALIASES)) {
+      if (ruName === searchLower || aliases.some(alias => alias === searchLower)) {
+        // Ищем в списке стран по алиасам
+        const foundByAlias = countries.find(country => {
+          const fields = [
+            country.name,
+            country.name_en,
+            country.name_ru,
+            country.code,
+            country.alpha2
+          ];
+          
+          return fields.some(field => {
+            if (!field) return false;
+            const fieldLower = field.toLowerCase();
+            return aliases.some(alias => fieldLower.includes(alias) || alias.includes(fieldLower));
+          });
+        });
+        
+        if (foundByAlias) {
+          const displayName = foundByAlias.name || foundByAlias.name_ru || foundByAlias.name_en || ruName;
+          console.log(`Found country by alias: ${displayName} (ID: ${foundByAlias.id})`);
+          return { id: foundByAlias.id, name: displayName };
+        }
+      }
+    }
+    
+    console.log(`Country not found: "${searchTerm}"`);
     return null;
+    
   } catch (e) {
     console.error('Country search error:', e);
     return null;
@@ -283,14 +369,20 @@ async function findCity(countryId, cityName) {
       })
     });
     
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      console.error('Cities API failed:', resp.status);
+      return null;
+    }
     
     const cities = await resp.json();
-    if (!Array.isArray(cities) || cities.length === 0) return null;
+    if (!Array.isArray(cities) || cities.length === 0) {
+      console.log(`No cities found for "${cityName}" in country ${countryId}`);
+      return null;
+    }
     
     // Берём первый найденный город
     const city = cities[0];
-    console.log(`Found city: ${city.name} (ID: ${city.id})`);
+    console.log(`Found city: ${city.name} (ID: ${city.id}) in country ${countryId}`);
     return { id: city.id, name: city.name };
     
   } catch (e) {
@@ -326,7 +418,7 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
     });
 
     const data = await resp.json();
-    console.log('Qwintry calc response:', JSON.stringify(data).slice(0, 1000));
+    console.log('Qwintry calc response received, costs count:', Object.keys(data?.costs || {}).length);
 
     if (data?.costs && Object.keys(data.costs).length > 0) {
       let reply = `📦 Стоимость доставки\n`;
@@ -356,13 +448,13 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
 
 Возможные причины:
 • Данный маршрут временно недоступен
-• Превышены лимиты по весу
+• Превышены лимиты по весу (максимум 18.1 кг для большинства методов)
 • Временные технические проблемы
 
 Попробуйте:
-• Другой склад или город
-• Проверить на официальном сайте: https://qwintry.com/ru/calculator/ru
-• Обратиться в поддержку Qwintry`
+• Другой склад (например, Германия вместо США)
+• Меньший вес посылки
+• Проверить на официальном сайте: https://qwintry.com/ru/calculator/ru`
       );
     }
   } catch (err) {
