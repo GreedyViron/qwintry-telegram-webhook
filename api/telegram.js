@@ -303,7 +303,7 @@ async function handleCountrySelection(chatId, userId, countryId) {
 // Выбор города
 async function showCitySelection(chatId, userId, countryId) {
   const cities = CITIES[countryId] || {};
-  const cityButtons = Object.entries(cities).map(([id, name]) => 
+  const cityButtons = Object.entries(cities).map(([id, name]) =>
     [{ text: name, callback_data: `city_${id}` }]
   );
 
@@ -342,7 +342,7 @@ async function handleCitySelection(chatId, userId, cityId) {
 // Обработка ввода города (текстом)
 async function handleCityInput(chatId, userId, cityName) {
   const userState = userStates.get(userId);
-  
+
   // Для простоты используем Москву как дефолт
   userState.state = 'awaiting_weight';
   userState.cityId = 4050; // Москва
@@ -355,14 +355,14 @@ async function handleCityInput(chatId, userId, cityName) {
 // Обработка ввода веса
 async function handleWeightInput(chatId, userId, weightText) {
   const weight = parseFloat(weightText.replace(',', '.'));
-  
+
   if (isNaN(weight) || weight <= 0 || weight > 50) {
     await sendMessage(chatId, "❌ Некорректный вес. Введите число от 0.1 до 50 кг:");
     return;
   }
 
   const userState = userStates.get(userId);
-  
+
   await sendMessage(chatId, "⏳ Рассчитываю стоимость доставки...");
 
   console.log(`🎯 Расчет: склад=${userState.warehouse}, hub=${userState.hubCode}, страна=${userState.countryName} (${userState.countryId}), город=${userState.cityName} (${userState.cityId}), вес=${weight}кг`);
@@ -390,9 +390,9 @@ async function handleWeightInput(chatId, userId, weightText) {
       [{ text: '🏠 Главное меню', callback_data: 'back_to_menu' }]
     ]
   };
-  
+
   await sendMessage(chatId, "Хотите сделать еще один расчет?", keyboard);
-  
+
   // Очищаем состояние
   userStates.delete(userId);
 }
@@ -473,11 +473,11 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
     const label = option.cost.label || key;
 
     let price;
-    if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
+      if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
       // 🔥 ФИКС: ручной расчет для EcoPost (игнорируем totalCost из API)
       const shipping = option.cost.shippingCost || 0;
       const fee = option.cost.gatewayFee || 0;
-      const packing = 7; // фиксированная стоимость упаковки
+      const packing = 3.5; // фиксированная стоимость упаковки (исправлено с 7 на 3.5)
       price = +(shipping + packing + fee).toFixed(2);
       console.log(`🔧 EcoPost calc: shipping=${shipping} + packing=${packing} + fee=${fee} = ${price}`);
     } else {
@@ -586,7 +586,7 @@ async function handleAIQuestion(chatId, userId, question) {
   await sendMessage(chatId, "🤖 Обрабатываю ваш вопрос...");
 
   const response = await getAbacusResponse(question);
-  
+
   const keyboard = {
     inline_keyboard: [
       [{ text: '❓ Задать еще вопрос', callback_data: 'ai_consultant' }],
@@ -595,7 +595,7 @@ async function handleAIQuestion(chatId, userId, question) {
   };
 
   await sendMessage(chatId, `🤖 **AI-консультант отвечает:**\n\n${response}`, keyboard);
-  
+
   // Очищаем состояние
   userStates.delete(userId);
 }
@@ -684,6 +684,6 @@ async function getAbacusResponse(message) {
   } catch (error) {
     console.error('❌ Ошибка Abacus AI:', error);
   }
-  
+
   return 'Извините, сервис временно недоступен. Попробуйте воспользоваться калькулятором или обратитесь в поддержку.';
 }
