@@ -157,15 +157,34 @@ async function handleCalcConversation(chatId, text) {
 Напишите полное название страны:`);
 
   } else if (state.step === 'country') {
-    const country = text.trim();
-    if (country.length < 2) {
+    const countryName = text.trim();
+    if (countryName.length < 2) {
       await sendTg(chatId, '❌ Введите полное название страны (например: Россия, Казахстан, Беларусь)');
       return;
     }
     
-    state.country = country;
+    await sendTg(chatId, '🔍 Ищу страну в базе данных...');
+    
+    // Поиск страны через API
+    const countryData = await findCountry(countryName);
+    if (!countryData) {
+      await sendTg(chatId, `❌ Страна "${countryName}" не найдена в базе Qwintry.
+
+Попробуйте:
+• Россия
+• Казахстан  
+• Беларусь
+• Украина
+• Германия
+• Австралия
+
+Введите название ещё раз:`);
+      return;
+    }
+    
+    state.country = countryData;
     state.step = 'city';
-    await sendTg(chatId, `✅ Маршрут: ${state.warehouse.name} → ${country}
+    await sendTg(chatId, `✅ Страна: ${countryData.name}
 
 🏙️ Введите название города назначения:
 
@@ -174,15 +193,28 @@ async function handleCalcConversation(chatId, text) {
 Напишите название города:`);
 
   } else if (state.step === 'city') {
-    const city = text.trim();
-    if (city.length < 2) {
+    const cityName = text.trim();
+    if (cityName.length < 2) {
       await sendTg(chatId, '❌ Введите название города (например: Москва, Алматы, Минск)');
       return;
     }
     
-    state.city = city;
+    await sendTg(chatId, '🔍 Ищу город в базе данных...');
+    
+    // Поиск города через API
+    const cityData = await findCity(state.country.id, cityName);
+    if (!cityData) {
+      await sendTg(chatId, `❌ Город "${cityName}" не найден в стране ${state.country.name}.
+
+Попробуйте ввести другое название города или проверьте правильность написания.
+
+Введите название города ещё раз:`);
+      return;
+    }
+    
+    state.city = cityData;
     state.step = 'weight';
-    await sendTg(chatId, `✅ Направление: ${state.warehouse.name} → ${state.country}, ${city}
+    await sendTg(chatId, `✅ Направление: ${state.warehouse.name} → ${state.country.name}, ${cityData.name}
 
 ⚖️ Введите вес посылки в килограммах:
 
@@ -201,52 +233,81 @@ async function handleCalcConversation(chatId, text) {
     state.step = null; // сброс
     
     await sendTg(chatId, '⏳ Рассчитываю стоимость доставки...');
-    await doCalc(chatId, state.warehouse.code, state.country, state.city, state.weight);
+    await doCalc(chatId, state.warehouse.code, state.country.id, state.city.id, state.weight, state.country.name, state.city.name);
     delete userStates[chatId];
   }
 
   userStates[chatId] = state;
 }
 
-// Запрос в API калькулятора Qwintry
-async function doCalc(chatId, hub, country, city, weight) {
-  // Сначала попробуем найти cityId через поиск городов
-  let cityId = null;
-  
+// Поиск страны через API Qwintry
+async function findCountry(countryName) {
   try {
-    // Поиск города в API Qwintry
-    const searchResp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/cities", {
+    const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/countries", {
+      method: "GET",
+      headers: { "Content-Type": "application/json" }
+    });
+    
+    if (!resp.ok) return null;
+    
+    const countries = await resp.json();
+    if (!Array.isArray(countries)) return null;
+    
+    // Ищем страну по названию (нечувствительно к регистру)
+    const searchName = countryName.toLowerCase();
+    const found = countries.find(country => 
+      country.name && country.name.toLowerCase().includes(searchName)
+    );
+    
+    if (found) {
+      console.log(`Found country: ${found.name} (ID: ${found.id})`);
+      return { id: found.id, name: found.name };
+    }
+    
+    return null;
+  } catch (e) {
+    console.error('Country search error:', e);
+    return null;
+  }
+}
+
+// Поиск города через API Qwintry
+async function findCity(countryId, cityName) {
+  try {
+    const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/cities", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        country: country,
-        query: city
+        country: countryId,
+        query: cityName
       })
     });
     
-    if (searchResp.ok) {
-      const cities = await searchResp.json();
-      if (cities && cities.length > 0) {
-        cityId = cities[0].id; // берём первый найденный город
-        console.log(`Found city: ${city} with ID: ${cityId}`);
-      }
-    }
+    if (!resp.ok) return null;
+    
+    const cities = await resp.json();
+    if (!Array.isArray(cities) || cities.length === 0) return null;
+    
+    // Берём первый найденный город
+    const city = cities[0];
+    console.log(`Found city: ${city.name} (ID: ${city.id})`);
+    return { id: city.id, name: city.name };
+    
   } catch (e) {
-    console.log('City search failed, using fallback');
+    console.error('City search error:', e);
+    return null;
   }
+}
 
-  // Если город не найден, используем дефолтные значения
-  if (!cityId) {
-    cityId = 4050; // Москва как fallback
-  }
-
+// Запрос в API калькулятора Qwintry
+async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityName) {
   const body = {
     hub: hub,
     weight: weight.toString(),
     weightMeasurement: "kg",
     dimensions: "1x1x1",
     dimensionsMeasurement: "cm",
-    country: country,
+    country: countryId,
     city: cityId,
     zip: "100000",
     itemsCost: "1",
@@ -269,7 +330,7 @@ async function doCalc(chatId, hub, country, city, weight) {
 
     if (data?.costs && Object.keys(data.costs).length > 0) {
       let reply = `📦 Стоимость доставки\n`;
-      reply += `📍 Маршрут: ${hub} → ${country}, ${city}\n`;
+      reply += `📍 Маршрут: ${hub} → ${countryName}, ${cityName}\n`;
       reply += `⚖️ Вес: ${weight} кг\n\n`;
 
       const methods = Object.entries(data.costs);
@@ -291,12 +352,12 @@ async function doCalc(chatId, hub, country, city, weight) {
       await sendTg(chatId, reply.trim());
     } else {
       await sendTg(chatId, 
-        `❌ Не удалось рассчитать доставку для маршрута ${hub} → ${country}, ${city}
+        `❌ Не удалось рассчитать доставку для маршрута ${hub} → ${countryName}, ${cityName}
 
 Возможные причины:
 • Данный маршрут временно недоступен
-• Город не найден в базе Qwintry
 • Превышены лимиты по весу
+• Временные технические проблемы
 
 Попробуйте:
 • Другой склад или город
