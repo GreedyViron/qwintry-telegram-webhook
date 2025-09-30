@@ -420,45 +420,50 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
   let costs = Object.entries(data.costs);
 
   // 🔑 фильтрация только ecopost для EU/UK/ES
-  if (["DE", "UK", "ES"].includes(warehouseCode)) {
-    costs = costs.filter(([key]) => key === "ecopost");
-  }
-
-  let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n`;
-  message += `⚖️ Вес: ${weight} кг\n\n`;
-
-costs.forEach(([key, option]) => {
-    if (!option?.cost) return;
-
-    const emoji = TARIFF_EMOJIS[key] || '📦';
-    const label = option.cost.label || key;
-
-    if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
-  const shipping = option.cost.costWithDiscount || option.cost.shippingCost || 0;  // правильное поле
-  const fee = option.cost.gatewayFee || 0;
-  const packing = 3.5; // фикс для EcoPost
-  price = +(shipping + fee + packing).toFixed(2);
-} else {
-  price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+if (["DE", "UK", "ES"].includes(warehouseCode)) {
+  costs = costs.filter(([key]) => key === "ecopost");
 }
 
-    const currency = option.cost.currency || '$';
-    const days = option.days || '—';
+let message = `📦 **Доставка ${warehouseName} → ${countryName}, ${cityName}**\n`;
+message += `⚖️ Вес: ${weight} кг\n\n`;
 
-    message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
+costs.forEach(([key, option]) => {
+  if (!option?.cost) return;
+
+  const emoji = TARIFF_EMOJIS[key] || '📦';
+  const label = option.cost.label || key;
+
+  let price;
+
+  if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
+    const shipping = option.cost.costWithDiscount || option.cost.shippingCost || 0;
+    const fee = option.cost.gatewayFee || 0;
+    const packing = 3.5; // фикс для EcoPost
+    price = +(shipping + fee + packing).toFixed(2);
+  } else {
+    price = option.cost.totalCostWithDiscount || option.cost.totalCost;
+  }
+
+  const currency = option.cost.currency || '$';
+  const days = option.days || '—';
+
+  message += `${emoji} **${label}** — ${currency}${price} (${days} дней)\n`;
 });
 
-  // Подсказка для EU
-  if (["DE", "UK", "ES"].includes(warehouseCode)) {
-    message += `\n💡 *Страховка $3 считается отдельно (опция сайта)*`;
-  }
+// Подсказка для EU
+if (["DE", "UK", "ES"].includes(warehouseCode)) {
+  message += `\n💡 *Страховка $3 считается отдельно (опция сайта)*`;
+}
 
-  if (data.country_info?.customs_limit) {
-    message += `\n💡 **Таможня:** ${data.country_info.customs_limit}`;
-  }
+// Таможня
+if (data.country_info?.customs_limit) {
+  message += `\n💡 **Таможня:** ${data.country_info.customs_limit}`;
+}
 
-  message += `\n\n🔗 [Подробнее на сайте](https://qwintry.com/ru/calculator)`;
-  return message;
+// Ссылка
+message += `\n\n🔗 [Подробнее на сайте](https://qwintry.com/ru/calculator)`;
+
+return message;
 }
 
 // Показать скидки
