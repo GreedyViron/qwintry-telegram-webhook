@@ -1,10 +1,10 @@
 // === QWINTRY TELEGRAM BOT ===
-// Финальная версия с меню + калькулятором (state-machine)
+// Финальная версия: меню + калькулятор (state-machine) + Abacus AI ответы
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const ABACUS_API_KEY = process.env.ABACUS_API_KEY;
 
-const userStates = {}; // сохраняем состояние диалога по chatId
+const userStates = {}; // сохраняем состояние пользователя
 
 // Главное меню
 function mainMenu() {
@@ -13,15 +13,13 @@ function mainMenu() {
       [{ text: "📦 Калькулятор" }],
       [{ text: "💸 Скидки" }, { text: "ℹ️ FAQ" }]
     ],
-    resize_keyboard: true,
-    one_time_keyboard: false
+    resize_keyboard: true
   };
 }
 
 // Webhook обработчик
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
-
   const body = req.body;
 
   if (!body.message) return res.status(200).end();
@@ -29,9 +27,9 @@ export default async function handler(req, res) {
   const chatId = body.message.chat.id;
   const text = body.message.text?.trim();
 
-  console.log("📩 Incoming:", chatId, text);
+  console.log("📩 Сообщение:", chatId, text);
 
-  // Команда старт
+  // === Команды ===
   if (text === "/start") {
     await sendMessage(
       chatId,
@@ -42,30 +40,28 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // Команда помощи
   if (text === "/help") {
     await sendMessage(
       chatId,
       "📖 Помощь:\n\n" +
-        "Вы можете:\n" +
-        "• Использовать меню (калькулятор, скидки, FAQ)\n" +
-        "• Спросить напрямую — я попробую ответить 😉"
+        "• `📦 Калькулятор` — расчёт доставки\n" +
+        "• `💸 Скидки` — спец. предложения\n" +
+        "• `ℹ️ FAQ` — часто задаваемые вопросы\n\n" +
+        "Или просто задайте вопрос в чат 😉",
+      mainMenu()
     );
     return res.status(200).end();
   }
 
-  // Проверяем состояние юзера
-  const state = userStates[chatId]?.state;
-
-  // Запуск калькулятора
+  // === Запуск калькулятора ===
   if (text === "📦 Калькулятор" || text === "/calc") {
     userStates[chatId] = { state: "awaiting_hub" };
     await sendMessage(
       chatId,
-      "🏢 Выберите склад отправления:",
+      "🏢 Выберите склад отправления:\n\n1️⃣ США (US1)\n2️⃣ Германия (DE1)\n3️⃣ Китай (CN1)",
       {
         keyboard: [
-          [{ text: "🇺🇸 США" }, { text: "🇩🇪 Германия" }, { text: "🇨🇳 Китай" }],
+          [{ text: "1️⃣ США" }, { text: "2️⃣ Германия" }, { text: "3️⃣ Китай" }],
           [{ text: "❌ Отмена" }]
         ],
         resize_keyboard: true
@@ -74,36 +70,35 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  // === State machine для калькулятора ===
-  if (state === "awaiting_hub") {
-    let hubCode = null;
-    if (/сша|usa/i.test(text)) hubCode = "US1";
-    if (/герм|germ/i.test(text)) hubCode = "DE1";
-    if (/кит/i.test(text)) hubCode = "CN1";
+  // === Обработка состояний калькулятора ===
+  const state = userStates[chatId]?.state;
 
-    if (!hubCode) {
-      await sendMessage(chatId, "❌ Пожалуйста, выберите склад: США, Германия или Китай");
+  if (state === "awaiting_hub") {
+    let hub = null;
+    if (text.includes("1") || /сша/i.test(text)) hub = "US1";
+    else if (text.includes("2") || /герм/i.test(text)) hub = "DE1";
+    else if (text.includes("3") || /кит/i.test(text)) hub = "CN1";
+
+    if (!hub) {
+      await sendMessage(chatId, "❌ Выберите склад: 1️⃣ США, 2️⃣ Германия, 3️⃣ Китай");
       return res.status(200).end();
     }
-
-    userStates[chatId] = { state: "awaiting_country", hubCode };
+    userStates[chatId] = { state: "awaiting_country", hubCode: hub };
     await sendMessage(chatId, "🌍 Введите страну назначения (например: Россия)");
     return res.status(200).end();
   }
 
   if (state === "awaiting_country") {
-    const country = text.trim();
-    userStates[chatId].country = country;
+    userStates[chatId].country = text;
     userStates[chatId].state = "awaiting_city";
     await sendMessage(chatId, "🏙 Введите город назначения (например: Москва)");
     return res.status(200).end();
   }
 
   if (state === "awaiting_city") {
-    const city = text.trim();
-    userStates[chatId].city = city;
+    userStates[chatId].city = text;
     userStates[chatId].state = "awaiting_weight";
-    await sendMessage(chatId, "⚖️ Введите вес посылки в кг (например: 2.5)");
+    await sendMessage(chatId, "⚖️ Введите вес посылки (например: 2.5)");
     return res.status(200).end();
   }
 
@@ -115,28 +110,31 @@ export default async function handler(req, res) {
     }
 
     const { hubCode, country, city } = userStates[chatId];
-    delete userStates[chatId]; // сброс стейта
+    delete userStates[chatId]; // очищаем state
 
-    await sendMessage(chatId, "⏳ Считаю стоимость доставки...");
+    await sendMessage(chatId, "⏳ Рассчитываю стоимость доставки...");
 
-    // Вызов калькулятора
     const result = await calculateDelivery(hubCode, country, city, weight);
 
     if (result.success) {
-      await sendMessage(chatId, formatResult(result.data, country, city, weight));
+      await sendMessage(
+        chatId,
+        formatResult(result.data, country, city, weight),
+        mainMenu()
+      );
     } else {
       await sendMessage(
         chatId,
-        "❌ Не удалось рассчитать доставку.\n" +
-          "Причина: " +
+        "❌ Не удалось рассчитать доставку.\nПричина: " +
           result.error +
-          "\n\n👉 Попробуйте на сайте: https://qwintry.com/ru/calculator"
+          "\n\n👉 Попробуйте здесь: https://qwintry.com/ru/calculator",
+        mainMenu()
       );
     }
     return res.status(200).end();
   }
 
-  // Если не калькулятор → отвечаем через Abacus AI
+  // === Если не калькулятор → Abacus AI ===
   if (text && !text.startsWith("/")) {
     const reply = await getAbacusAnswer(text);
     await sendMessage(chatId, reply, mainMenu());
@@ -145,7 +143,7 @@ export default async function handler(req, res) {
   return res.status(200).end();
 }
 
-// === Расчет доставки через Qwintry API ===
+// === Вызов API Qwintry ===
 async function calculateDelivery(hubCode, country, city, weight) {
   try {
     const params = new URLSearchParams({
@@ -176,7 +174,7 @@ async function calculateDelivery(hubCode, country, city, weight) {
   }
 }
 
-// === Форматирование результата ===
+// === Форматируем результат ===
 function formatResult(data, country, city, weight) {
   let msg = `📦 Доставка → ${country}, ${city}\n⚖️ Вес: ${weight} кг\n\n`;
 
@@ -191,7 +189,7 @@ function formatResult(data, country, city, weight) {
   return msg;
 }
 
-// === Abacus AI ответы ===
+// === Abacus AI ===
 async function getAbacusAnswer(message) {
   try {
     const res = await fetch("https://api.abacus.ai/chat/completions", {
@@ -219,7 +217,7 @@ async function getAbacusAnswer(message) {
   return "Извините, сервис временно недоступен.";
 }
 
-// === Отправка сообщения в Telegram ===
+// === Telegram Send ===
 async function sendMessage(chatId, text, keyboard = null) {
   try {
     await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
