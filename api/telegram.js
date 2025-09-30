@@ -576,7 +576,7 @@ async function findCity(countryId, cityName) {
   }
 }
 
-// Запрос в API калькулятора Qwintry
+// 🔥 ИСПРАВЛЕННЫЙ запрос в API калькулятора Qwintry с поддержкой всех 4 тарифов
 async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityName) {
   const body = {
     hub: hub,
@@ -594,6 +594,8 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
   };
 
   try {
+    console.log(`🚀 Calling Qwintry API with:`, JSON.stringify(body, null, 2));
+    
     const resp = await fetch('https://q3-api.qwintry.com/ru/frontend/calculator/calculate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -601,36 +603,68 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
     });
 
     const data = await resp.json();
+    console.log(`📦 Qwintry API response:`, JSON.stringify(data, null, 2));
 
+    // Проверяем наличие тарифов
     if (data?.costs && Object.keys(data.costs).length > 0) {
       let reply = `📦 Стоимость доставки\n`;
       reply += `📍 Маршрут: ${hub} → ${countryName}, ${cityName}\n`;
       reply += `⚖️ Вес: ${weight} кг\n\n`;
 
+      // Получаем все методы доставки
       const methods = Object.entries(data.costs);
-      methods.forEach(([method, details], index) => {
-        const label = details?.cost?.label || method;
-        const price = details?.cost?.costWithDiscount || details?.cost?.shippingCost || 0;
-        const total = details?.cost?.totalCostWithDiscount || details?.cost?.totalCost || 0;
-        const days = details?.days || '?';
+      let methodIndex = 1;
 
-        reply += `${index + 1}. ${label}\n`;
+      methods.forEach(([methodKey, details]) => {
+        // Извлекаем данные о тарифе
+        const label = details?.label || details?.name || methodKey;
+        const cost = details?.cost || details;
+        
+        // Пытаемся найти цену в разных полях
+        const price = cost?.costWithDiscount 
+                   || cost?.shippingCost 
+                   || cost?.cost 
+                   || cost?.price 
+                   || 0;
+        
+        const total = cost?.totalCostWithDiscount 
+                   || cost?.totalCost 
+                   || cost?.total 
+                   || price;
+        
+        const days = details?.days 
+                  || details?.deliveryTime 
+                  || details?.time 
+                  || '?';
+
+        // Форматируем вывод
+        reply += `${methodIndex}. ${label}\n`;
         reply += `💰 Доставка: $${price}\n`;
         reply += `💳 Итого: $${total}\n`;
-        reply += `⏰ Срок: ${days}\n\n`;
+        reply += `⏰ Срок: ${days} дней\n\n`;
+        
+        methodIndex++;
       });
 
       reply += `ℹ️ Цены указаны в долларах США\n`;
       reply += `📱 Для нового расчёта используйте /calc`;
 
       await sendTg(chatId, reply.trim());
+      
+    } else if (data?.error) {
+      // Если API вернул ошибку
+      console.error('Qwintry API error:', data.error);
+      await sendTg(chatId, `❌ Ошибка расчёта: ${data.error}\n\nПопробуйте другой склад или проверьте данные.`);
+      
     } else {
+      // Если нет тарифов, но и нет ошибки
+      console.log('No costs returned from Qwintry API');
       await sendTg(chatId,
 `❌ Не удалось рассчитать доставку для маршрута ${hub} → ${countryName}, ${cityName}
 
 Возможные причины:
 • Данный маршрут временно недоступен
-• Превышены лимиты по весу (максимум 18.1 кг для большинства методов)
+• Превышены лимиты по весу
 • Временные технические проблемы
 
 Попробуйте:
@@ -640,7 +674,7 @@ async function doCalc(chatId, hub, countryId, cityId, weight, countryName, cityN
       );
     }
   } catch (err) {
-    console.error('Calc error', err);
+    console.error('Calc API error:', err);
     await sendTg(chatId,
       `❌ Произошла ошибка при расчёте доставки.
 
