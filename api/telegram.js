@@ -629,26 +629,27 @@ async function findCity(query, countryId) {
 // Расчет стоимости доставки (исправленная версия)
 async function calculateDelivery(weight, countryId, cityId, hubCode) {
   try {
-   
-    console.log(`📊 Расчет доставки: вес=${weight}кг, страна=${countryId}, город=${cityId}, hub=${hubCode}`);
+    console.log(`📊 Расчет: вес=${weight}кг, страна=${countryId}, город=${cityId}, hub=${hubCode}`);
 
-    const params = new URLSearchParams({
+    const payload = {
       weight: weight.toString(),
       country: countryId.toString(),
       city: cityId.toString(),
-      weightMeasurement: 'kg',
-      dimensions: '10x10x10', // Исправлено: используем стандартные размеры
-      dimensionsMeasurement: 'cm',
-      hubCode: hubCode // Обязательно передаем hubCode
-    });
+      weightMeasurement: "kg",
+      dimensions: "10x10x10",
+      dimensionsMeasurement: "cm",
+      hubCode: hubCode
+    };
 
-    const response = await fetch('https://q3-api.qwintry.com/ru/calculate', {
-      method: 'POST',
+    console.log("👉 Отправляем в API:", payload);
+
+    const response = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
+      method: "POST",
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Accept': 'application/json'
+        "Content-Type": "application/json",
+        "Accept": "application/json"
       },
-      body: params.toString()
+      body: JSON.stringify(payload)
     });
 
     if (!response.ok) {
@@ -659,20 +660,13 @@ async function calculateDelivery(weight, countryId, cityId, hubCode) {
     console.log("📦 Ответ API:", JSON.stringify(data, null, 2));
 
     if (!data.costs || Object.keys(data.costs).length === 0) {
-      return {
-        success: false,
-        error: 'Нет доступных способов доставки для данного маршрута'
-      };
+      return { success: false, error: "Нет доступных способов доставки" };
     }
 
     return { success: true, data };
-
   } catch (error) {
-    console.error('❌ Ошибка расчета доставки:', error);
-    return {
-      success: false,
-      error: `Ошибка API: ${error.message}`
-    };
+    console.error("❌ Ошибка расчета доставки:", error);
+    return { success: false, error: `Ошибка API: ${error.message}` };
   }
 }
 
