@@ -435,11 +435,14 @@ function formatDeliveryResult(data, warehouseName, countryName, cityName, weight
 
     let price;
     if (["DE","UK","ES"].includes(warehouseCode) && key === "ecopost") {
-  const shipping = option.cost.shippingCost || 0;
-  const fee = option.cost.gatewayFee || 0;
-  price = +(shipping + 7 + fee).toFixed(2);  // фикс $7 упаковки
-} else {
-      // Для US / CN оставляем как есть
+      // 🔥 ФИКС: ручной расчет для EcoPost (игнорируем totalCost из API)
+      const shipping = option.cost.shippingCost || 0;
+      const fee = option.cost.gatewayFee || 0;
+      const packing = 7; // фиксированная стоимость упаковки
+      price = +(shipping + packing + fee).toFixed(2);
+      console.log(`🔧 EcoPost calc: shipping=${shipping} + packing=${packing} + fee=${fee} = ${price}`);
+    } else {
+      // Для US / CN используем totalCost из API
       price = option.cost.totalCostWithDiscount || option.cost.totalCost;
     }
 
