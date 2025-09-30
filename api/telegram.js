@@ -7,6 +7,15 @@ const DEPLOYMENT_ID = '1413dbc596';
 // для хранения состояний диалога калькулятора
 const userStates = {};
 
+// Склады Qwintry
+const WAREHOUSES = {
+  '1': { code: 'US1', name: 'США' },
+  '2': { code: 'DE1', name: 'Германия' },
+  '3': { code: 'UK1', name: 'Великобритания' },
+  '4': { code: 'CN1', name: 'Китай' },
+  '5': { code: 'ES1', name: 'Испания' }
+};
+
 export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') {
@@ -42,15 +51,18 @@ export default async function handler(req, res) {
 
     // Команда /calc - запускаем пошаговый расчёт
     if (userText === '/calc') {
-      userStates[chatId] = { step: 'hub' };
+      userStates[chatId] = { step: 'warehouse' };
       await sendTg(chatId, `📦 Калькулятор доставки
 
-Введите код склада отправления:
-• DE1 - Германия
-• US1 - США  
-• UK1 - Великобритания
+Выберите склад отправления (введите номер):
 
-Например: DE1`);
+1️⃣ США
+2️⃣ Германия  
+3️⃣ Великобритания
+4️⃣ Китай
+5️⃣ Испания
+
+Например: 1`);
       return res.status(200).send('OK');
     }
 
@@ -119,52 +131,77 @@ export default async function handler(req, res) {
 async function handleCalcConversation(chatId, text) {
   const state = userStates[chatId] || {};
 
-  if (state.step === 'hub') {
-    const hub = text.toUpperCase().trim();
-    if (!['DE1', 'US1', 'UK1'].includes(hub)) {
-      await sendTg(chatId, `❌ Неверный код склада. Используйте:
-• DE1 - Германия
-• US1 - США
-• UK1 - Великобритания
+  if (state.step === 'warehouse') {
+    const warehouseNum = text.trim();
+    if (!WAREHOUSES[warehouseNum]) {
+      await sendTg(chatId, `❌ Неверный номер склада. Выберите от 1 до 5:
+
+1️⃣ США
+2️⃣ Германия  
+3️⃣ Великобритания
+4️⃣ Китай
+5️⃣ Испания
 
 Попробуйте ещё раз:`);
       return;
     }
-    state.hub = hub;
+    
+    state.warehouse = WAREHOUSES[warehouseNum];
     state.step = 'country';
-    await sendTg(chatId, `✅ Склад: ${hub}
+    await sendTg(chatId, `✅ Склад: ${state.warehouse.name}
 
-🌍 Введите код страны назначения:
-• RU - Россия
-• KZ - Казахстан  
-• BY - Беларусь
-• UA - Украина
+🌍 Введите название страны назначения:
 
-Например: RU`);
+Например: Россия, Казахстан, Беларусь, Украина, Австралия, Германия и т.д.
+
+Напишите полное название страны:`);
+
   } else if (state.step === 'country') {
-    const country = text.toUpperCase().trim();
-    if (country.length !== 2) {
-      await sendTg(chatId, '❌ Введите двухбуквенный код страны (например: RU, KZ, BY, UA)');
+    const country = text.trim();
+    if (country.length < 2) {
+      await sendTg(chatId, '❌ Введите полное название страны (например: Россия, Казахстан, Беларусь)');
       return;
     }
+    
     state.country = country;
+    state.step = 'city';
+    await sendTg(chatId, `✅ Маршрут: ${state.warehouse.name} → ${country}
+
+🏙️ Введите название города назначения:
+
+Например: Москва, Алматы, Минск, Киев и т.д.
+
+Напишите название города:`);
+
+  } else if (state.step === 'city') {
+    const city = text.trim();
+    if (city.length < 2) {
+      await sendTg(chatId, '❌ Введите название города (например: Москва, Алматы, Минск)');
+      return;
+    }
+    
+    state.city = city;
     state.step = 'weight';
-    await sendTg(chatId, `✅ Маршрут: ${state.hub} → ${country}
+    await sendTg(chatId, `✅ Направление: ${state.warehouse.name} → ${state.country}, ${city}
 
 ⚖️ Введите вес посылки в килограммах:
 
-Например: 2.5 или 3`);
+Например: 2.5 или 3 или 0.5
+
+Введите вес:`);
+
   } else if (state.step === 'weight') {
     const weight = parseFloat(text.replace(',', '.'));
     if (isNaN(weight) || weight <= 0 || weight > 50) {
       await sendTg(chatId, '❌ Введите корректный вес от 0.1 до 50 кг\n\nНапример: 2.5 или 3');
       return;
     }
+    
     state.weight = weight.toString();
     state.step = null; // сброс
     
     await sendTg(chatId, '⏳ Рассчитываю стоимость доставки...');
-    await doCalc(chatId, state.hub, state.country, state.weight);
+    await doCalc(chatId, state.warehouse.code, state.country, state.city, state.weight);
     delete userStates[chatId];
   }
 
@@ -172,7 +209,37 @@ async function handleCalcConversation(chatId, text) {
 }
 
 // Запрос в API калькулятора Qwintry
-async function doCalc(chatId, hub, country, weight) {
+async function doCalc(chatId, hub, country, city, weight) {
+  // Сначала попробуем найти cityId через поиск городов
+  let cityId = null;
+  
+  try {
+    // Поиск города в API Qwintry
+    const searchResp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/cities", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        country: country,
+        query: city
+      })
+    });
+    
+    if (searchResp.ok) {
+      const cities = await searchResp.json();
+      if (cities && cities.length > 0) {
+        cityId = cities[0].id; // берём первый найденный город
+        console.log(`Found city: ${city} with ID: ${cityId}`);
+      }
+    }
+  } catch (e) {
+    console.log('City search failed, using fallback');
+  }
+
+  // Если город не найден, используем дефолтные значения
+  if (!cityId) {
+    cityId = 4050; // Москва как fallback
+  }
+
   const body = {
     hub: hub,
     weight: weight.toString(),
@@ -180,7 +247,7 @@ async function doCalc(chatId, hub, country, weight) {
     dimensions: "1x1x1",
     dimensionsMeasurement: "cm",
     country: country,
-    city: 4050,
+    city: cityId,
     zip: "100000",
     itemsCost: "1",
     insurance: null,
@@ -189,6 +256,8 @@ async function doCalc(chatId, hub, country, weight) {
   };
 
   try {
+    console.log('Sending calc request:', JSON.stringify(body));
+    
     const resp = await fetch("https://q3-api.qwintry.com/ru/frontend/calculator/calculate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -196,10 +265,11 @@ async function doCalc(chatId, hub, country, weight) {
     });
 
     const data = await resp.json();
+    console.log('Qwintry calc response:', JSON.stringify(data).slice(0, 1000));
 
     if (data?.costs && Object.keys(data.costs).length > 0) {
       let reply = `📦 Стоимость доставки\n`;
-      reply += `📍 Маршрут: ${hub} → ${country}\n`;
+      reply += `📍 Маршрут: ${hub} → ${country}, ${city}\n`;
       reply += `⚖️ Вес: ${weight} кг\n\n`;
 
       const methods = Object.entries(data.costs);
@@ -221,20 +291,26 @@ async function doCalc(chatId, hub, country, weight) {
       await sendTg(chatId, reply.trim());
     } else {
       await sendTg(chatId, 
-        `❌ Не удалось рассчитать доставку для указанных параметров.
+        `❌ Не удалось рассчитать доставку для маршрута ${hub} → ${country}, ${city}
 
 Возможные причины:
-• Неподдерживаемый маршрут
-• Превышен лимит веса  
-• Временные технические проблемы
+• Данный маршрут временно недоступен
+• Город не найден в базе Qwintry
+• Превышены лимиты по весу
 
-Попробуйте другие параметры или обратитесь в поддержку.`
+Попробуйте:
+• Другой склад или город
+• Проверить на официальном сайте: https://qwintry.com/ru/calculator/ru
+• Обратиться в поддержку Qwintry`
       );
     }
   } catch (err) {
     console.error('Calc error', err);
     await sendTg(chatId, 
-      '❌ Произошла ошибка при расчёте доставки.\n\nПопробуйте позже или обратитесь в поддержку.'
+      `❌ Произошла ошибка при расчёте доставки.
+
+Попробуйте позже или воспользуйтесь официальным калькулятором:
+https://qwintry.com/ru/calculator/ru`
     );
   }
 }
