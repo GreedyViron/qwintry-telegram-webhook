@@ -629,6 +629,7 @@ async function findCity(query, countryId) {
 // Расчет стоимости доставки (исправленная версия)
 async function calculateDelivery(weight, countryId, cityId, hubCode) {
   try {
+   
     console.log(`📊 Расчет доставки: вес=${weight}кг, страна=${countryId}, город=${cityId}, hub=${hubCode}`);
 
     const params = new URLSearchParams({
@@ -655,7 +656,7 @@ async function calculateDelivery(weight, countryId, cityId, hubCode) {
     }
 
     const data = await response.json();
-    console.log('📦 Ответ API получен успешно');
+    console.log("📦 Ответ API:", JSON.stringify(data, null, 2));
 
     if (!data.costs || Object.keys(data.costs).length === 0) {
       return {
