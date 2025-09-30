@@ -4,6 +4,7 @@ const TOKEN = process.env.BOT_TOKEN;
 const API = `https://api.telegram.org/bot${TOKEN}`;
 
 export default async function handler(req, res) {
+  console.log("BOT ONLINE ✅", req.method, req.url);
   if (req.method === "POST") {
     const body = req.body;
     console.log("Received update:", JSON.stringify(body, null, 2));
