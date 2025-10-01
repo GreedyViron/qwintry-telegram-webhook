@@ -32,3 +32,12 @@ export async function answerCallbackQuery(callbackQueryId, text = '') {
     console.error('❌ answerCallbackQuery error:', e);
   }
 }
+
+// Клавиатура с кнопкой "Главное меню"
+export const mainMenuKeyboard = {
+  keyboard: [
+    [{ text: '🏠 Главное меню' }]
+  ],
+  resize_keyboard: true,
+  one_time_keyboard: false
+};
