@@ -1,6 +1,6 @@
 // /api/telegram.js
 import { sendMessage, answerCallbackQuery } from './lib/utils.js';
-import { handleCalcCommand, handleCalcCallback } from './lib/calc.js';
+import { handleCalcCommand, handleCalcCallback, handleCalcText } from './lib/calc.js';
 import { handleAICommand } from './lib/ai.js';
 
 export default async function handler(req, res) {
@@ -35,6 +35,12 @@ export default async function handler(req, res) {
         return res.status(200).send('OK');
       }
 
+      // Проверяем, не в процессе ли калькулятора (ввод города/веса)
+      const handled = await handleCalcText(chatId, text);
+      if (handled) {
+        return res.status(200).send('OK');
+      }
+
       // Все остальные сообщения → AI-консультант
       await handleAICommand(chatId, text);
     }
@@ -47,19 +53,23 @@ export default async function handler(req, res) {
       console.log(`🎯 Callback: ${data}`);
       await answerCallbackQuery(cq.id);
 
-      // Калькулятор
+      // Калькулятор (главное меню)
       if (data === 'calc') {
         await handleCalcCommand(chatId);
       }
-      // Обработка выбора склада и других действий калькулятора
-      else if (data.startsWith('calc_')) {
+      // Любое действие калькулятора (склад, страна, город и т.д.)
+      else if (
+        data.startsWith('calc_') ||
+        data.startsWith('country_') ||
+        data.startsWith('city_')
+      ) {
         await handleCalcCallback(chatId, data);
       }
       // AI-консультант
       else if (data === 'ai') {
         await sendMessage(chatId, '🤖 **AI-консультант Qwintry**\n\nЗадайте любой вопрос о доставке, тарифах, сроках или услугах.\n\n💬 Напишите ваш вопрос:');
       }
-      // Скидки (пока заглушка)
+      // Скидки
       else if (data === 'discounts') {
         const keyboard = {
           inline_keyboard: [
