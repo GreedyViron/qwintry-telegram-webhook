@@ -204,12 +204,11 @@ async function showCitySelection(chatId, country) {
     const keyboard = {
       inline_keyboard: [
         ...cityButtons,
-        [{ text: '✍️ Ввести город вручную', callback_data: 'city_manual' }],
         [{ text: '🔙 Назад к странам', callback_data: 'calc' }]
       ]
     };
 
-    await sendMessage(chatId, '🏙️ **Выберите город или введите вручную:**', keyboard);
+    await sendMessage(chatId, '🏙️ **Выберите город или напишите вручную:**', keyboard);
   } else {
     // Для других стран пока просто запрашиваем ввод
     const state = userStates.get(chatId);
