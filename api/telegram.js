@@ -34,7 +34,6 @@ export default async function handler(req, res) {
         );
         
         // Показываем кнопку "Главное меню" под строкой ввода
-        await sendMessage(chatId, 'Используйте кнопку ниже для быстрого возврата в меню 👇', mainMenuKeyboard);
         return res.status(200).send('OK');
       }
 
