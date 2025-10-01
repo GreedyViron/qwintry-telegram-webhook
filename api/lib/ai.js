@@ -5,17 +5,34 @@ const APPS_GET_CHAT_URL = 'https://apps.abacus.ai/api/getChatResponse';
 const DEPLOYMENT_ID = process.env.ABACUS_DEPLOYMENT_ID || '1413dbc596';
 const ABACUS_DEPLOYMENT_TOKEN = process.env.ABACUS_DEPLOYMENT_TOKEN;
 
+// Хранилище истории диалогов: { chatId: [ {is_user: true, text: "..."}, ... ] }
+const sessions = {};
+const MAX_HISTORY = 20; // Храним последние 20 сообщений (10 пар вопрос-ответ)
+
 export async function handleAICommand(chatId, userText) {
   try {
+    // Инициализируем сессию, если её нет
+    if (!sessions[chatId]) {
+      sessions[chatId] = [];
+    }
+
+    // Добавляем сообщение пользователя в историю
+    sessions[chatId].push({ is_user: true, text: userText });
+
+    // Ограничиваем размер истории (чтобы не раздувать запросы)
+    if (sessions[chatId].length > MAX_HISTORY) {
+      sessions[chatId] = sessions[chatId].slice(-MAX_HISTORY);
+    }
+
     const url = `${APPS_GET_CHAT_URL}?deploymentToken=${encodeURIComponent(ABACUS_DEPLOYMENT_TOKEN)}&deploymentId=${encodeURIComponent(DEPLOYMENT_ID)}`;
 
     const body = {
-      messages: [{ is_user: true, text: userText }],
+      messages: sessions[chatId], // Отправляем всю историю
       conversationId: String(chatId),
       userId: String(chatId)
     };
 
-    console.log('🔵 Calling Abacus URL:', url);
+    console.log('🔵 Calling Abacus with history length:', sessions[chatId].length);
 
     const resp = await fetch(url, {
       method: 'POST',
@@ -32,7 +49,6 @@ export async function handleAICommand(chatId, userText) {
       try {
         const data = JSON.parse(raw || '{}');
 
-        // Пробуем все возможные поля (как в старом коде)
         reply =
           data?.responseText ||
           data?.text ||
@@ -42,7 +58,7 @@ export async function handleAICommand(chatId, userText) {
           data?.result?.text ||
           reply;
 
-        // Формат с массивом messages (важно!)
+        // Формат с массивом messages
         if (!data?.responseText && data?.result?.messages?.length) {
           const lastAssistant = [...data.result.messages]
             .reverse()
@@ -50,7 +66,6 @@ export async function handleAICommand(chatId, userText) {
           if (lastAssistant?.text) reply = lastAssistant.text;
         }
 
-        // Защита от пустой строки
         if (!reply || typeof reply !== 'string' || !reply.trim()) {
           reply = 'Извините, не удалось получить ответ.';
         }
@@ -61,9 +76,25 @@ export async function handleAICommand(chatId, userText) {
       console.error('❌ Abacus non-OK', resp.status, raw.slice(0, 500));
     }
 
+    // Добавляем ответ бота в историю
+    sessions[chatId].push({ is_user: false, text: reply });
+
+    // Ограничиваем снова после добавления ответа
+    if (sessions[chatId].length > MAX_HISTORY) {
+      sessions[chatId] = sessions[chatId].slice(-MAX_HISTORY);
+    }
+
     await sendMessage(chatId, `🤖 ${reply}`);
   } catch (e) {
     console.error('❌ AI error:', e);
     await sendMessage(chatId, 'Извините, не получилось получить ответ.');
+  }
+}
+
+// Опционально: функция для очистки истории (можно вызывать по команде /clear)
+export function clearHistory(chatId) {
+  if (sessions[chatId]) {
+    delete sessions[chatId];
+    console.log(`🗑️ История для chatId ${chatId} очищена`);
   }
 }
