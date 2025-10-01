@@ -1,4 +1,4 @@
-// /api/lib/utils.js
+// /api/lib/utils.js 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 export async function sendMessage(chatId, text, keyboard = null) {
