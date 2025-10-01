@@ -1,5 +1,5 @@
 // /api/telegram.js
-import { sendMessage, answerCallbackQuery } from './lib/utils.js';
+import { sendMessage, answerCallbackQuery, mainMenuKeyboard } from './lib/utils.js';
 import { handleCalcCommand, handleCalcCallback, handleCalcText } from './lib/calc.js';
 import { handleAICommand } from './lib/ai.js';
 
